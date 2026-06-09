@@ -1,6 +1,8 @@
 # --- Sanal ortam (paylaşılmaz, herkes kendi kurar) ---
 venv/
 .venv/
+.venv-gui/
+.venv312/
 env/
 
 # --- Python ---

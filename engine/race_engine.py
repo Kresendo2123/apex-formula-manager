@@ -69,16 +69,19 @@ class LapRaceEngine:
         start = max(1, min(num_laps - 2, start))
         peak = max(0.30, min(1.0, forecast["exp_intensity"] * (1 + random.gauss(0, (1 - conf) * 0.4))))
         dur = max(3, int(round(forecast["exp_duration"] + random.gauss(0, (1 - conf) * 6))))
-        ramp = random.randint(2, 5)
+        ramp_up = max(3, min(10, int(round(9 - peak * 5 + random.gauss(0, 1)))))
+        ramp_down = max(4, min(12, int(round(4 + peak * 7 + random.gauss(0, 1)))))
         for i in range(num_laps + 2):
             if i < start:
                 w = 0.0
-            elif i < start + ramp:
-                w = peak * (i - start + 1) / ramp
-            elif i < start + ramp + dur:
+            elif i < start + ramp_up:
+                progress = (i - start + 1) / ramp_up
+                w = peak * (progress ** 1.35)
+            elif i < start + ramp_up + dur:
                 w = peak
             else:
-                w = peak - (i - (start + ramp + dur)) * peak / max(1, ramp)
+                progress = (i - (start + ramp_up + dur)) / max(1, ramp_down)
+                w = peak * (max(0.0, 1 - progress) ** 1.15)
             wet[i] = max(0.0, min(1.0, w))
         return wet, round(max(wet), 2), True
 
@@ -100,14 +103,29 @@ class LapRaceEngine:
         if c["type"] == "dry": return "dry"
         return "wet" if compound == "wet" else "inter"
 
-    def _desired_category(self, wetness: float, wet_bias: float = 0.0) -> str:
+    def _desired_category(self, wetness: float, wet_bias: float = 0.0,
+                          current_compound: Optional[str] = None) -> str:
         s = self.settings
-        if wetness >= s.WET_TYRE_THRESHOLD + wet_bias: return "wet"
-        if wetness >= s.DRY_TYRE_WET_THRESHOLD + wet_bias: return "inter"
+        current = self._compound_category(current_compound) if current_compound else None
+        dry_to_inter = s.DRY_TYRE_WET_THRESHOLD + wet_bias
+        inter_to_dry = s.DRY_TYRE_BACK_THRESHOLD + wet_bias
+        inter_to_wet = s.WET_TYRE_THRESHOLD + wet_bias
+        wet_to_inter = s.WET_TYRE_BACK_THRESHOLD + wet_bias
+
+        if current == "wet":
+            return "wet" if wetness >= wet_to_inter else ("inter" if wetness >= inter_to_dry else "dry")
+        if current == "inter":
+            if wetness >= inter_to_wet:
+                return "wet"
+            return "inter" if wetness >= inter_to_dry else "dry"
+
+        if wetness >= inter_to_wet: return "wet"
+        if wetness >= dry_to_inter: return "inter"
         return "dry"
 
-    def _desired_compound(self, planned_dry: str, wetness: float, wet_bias: float) -> str:
-        cat = self._desired_category(wetness, wet_bias)
+    def _desired_compound(self, planned_dry: str, wetness: float, wet_bias: float,
+                          current_compound: Optional[str] = None) -> str:
+        cat = self._desired_category(wetness, wet_bias, current_compound)
         if cat == "wet": return "wet"
         if cat == "inter": return "inter"
         return planned_dry
@@ -192,19 +210,28 @@ class LapRaceEngine:
         for i, st in enumerate(ordered):
             st["cumulative_time"] = base + i * gap
 
+    def _tyre_race_score(self, st) -> float:
+        comp = self.settings.TYRE_COMPOUNDS[st["current_compound"]]
+        return comp["pace"] - st["wear_pct"] * 0.08
+
     def _overtake_success(self, attacker, defender, ot_difficulty, drs_on, extra_bonus=0.0) -> bool:
         s = self.settings
         pilot_diff = (attacker["attack_defense"] - defender["attack_defense"]) / 100.0 * 0.15
-        power_diff = (attacker["base_power"] - defender["base_power"]) * 0.02
-        tire_diff = (defender["wear_pct"] - attacker["wear_pct"]) * 0.20
-        
-        prob = s.BASE_OVERTAKE_CHANCE * (1 - ot_difficulty)
-        prob += pilot_diff + power_diff + tire_diff
-        
-        if drs_on: prob += s.DRS_BOOST
+        power_diff = (attacker["base_power"] - defender["base_power"]) * 0.012
+        pace_delta = defender.get("last_lap_time", 0.0) - attacker.get("last_lap_time", 0.0)
+        pace_bonus = max(-0.08, min(0.16, pace_delta * s.OVERTAKE_PACE_DELTA_SCALE))
+        tyre_state_diff = self._tyre_race_score(attacker) - self._tyre_race_score(defender)
+        tyre_bonus = max(-0.05, min(0.08, tyre_state_diff * s.OVERTAKE_TYRE_STATE_SCALE))
+
+        track_factor = max(0.05, (1 - ot_difficulty) ** 1.7)
+        prob = (s.BASE_OVERTAKE_CHANCE + pilot_diff + power_diff + pace_bonus + tyre_bonus) * track_factor
+
+        if drs_on:
+            prob += s.DRS_BOOST * track_factor
         prob += extra_bonus
-        
-        return random.random() < max(0.01, min(0.99, prob))
+
+        max_prob = 0.08 + (1 - ot_difficulty) * 0.42
+        return random.random() < max(0.003, min(max_prob, prob))
 
     # ---------------------------------------------------------------- ana döngü
 
@@ -262,6 +289,8 @@ class LapRaceEngine:
                 "pace_penalty": 1.0, "pending_repair": False, "incident_time_loss": 0.0, "repairs": 0,
                 "battle_time_loss": 0.0, "pit_loss_this_lap": 0.0,
                 "repair_loss_this_lap": 0.0, "incident_loss_this_lap": 0.0,
+                "last_lap_time": 0.0,
+                "dirty_air_cooldown": 0,
             }
 
         track_order = [states[d_id] for d_id in grid_order]
@@ -319,7 +348,7 @@ class LapRaceEngine:
                     self._bunch_field(track_order, 0.0, 0.0)
                     for st in track_order:
                         st["current_compound"] = self._desired_compound(
-                            st["compound_by_lap"][lap], wetness, st["wet_bias"])
+                            st["compound_by_lap"][lap], wetness, st["wet_bias"], st["current_compound"])
                         st["wear_pct"] = 0.0
                     log(lap, "RED_FLAG", f"🔴 KIRMIZI BAYRAK ({req_who}) — yarış durdu, restart", driver=req_who)
                     sc_laps, caution_len = 1, 1
@@ -347,7 +376,11 @@ class LapRaceEngine:
                     st["laps_completed"] = lap
             else:
                 for i, st in enumerate(track_order):
-                    desired = self._desired_compound(st["compound_by_lap"][lap], wetness, st["wet_bias"])
+                    if st["dirty_air_cooldown"] > 0:
+                        st["dirty_air_cooldown"] -= 1
+
+                    desired = self._desired_compound(
+                        st["compound_by_lap"][lap], wetness, st["wet_bias"], st["current_compound"])
                     pit_loss = self._handle_pit(st, desired, lap, log, track)
                     repair_loss = s.REPAIR_TIME if st["pending_repair"] else 0.0
                     st["pending_repair"] = False
@@ -369,17 +402,13 @@ class LapRaceEngine:
                     lap_time *= (1 - comp["pace"]) * (1 - st["form"]) * (1 + pace_pen) * st["pace_penalty"]
                     lap_time *= (1 + random.gauss(0, self._lap_noise_sigma(st["consistency"])))
 
-                    # Track-position avantajı: öndeki araç temiz havada + iyi kalkış yaşar.
-                    # MEVCUT pozisyona (i) bağlı, SABİT SANİYE (uzun turlu pistler orantısız
-                    # avantaj almasın) ve pistin GEÇİŞ ZORLUĞUYLA ölçekli (zor pistte track
-                    # position değerli). İki bileşen: START (tura göre söner) + CLEAN-AIR
-                    # (kalıcı, pit sonrası da liderliği korur). Pozisyona göre ÜSTEL azalır.
-                    if i < s.GRID_ADVANTAGE_SPREAD:
+                    # Track-position avantajı sadece start fazında uygulanır.
+                    # Kalıcı "clean air" bonusu yerine yakın takipteki araçlar aşağıda
+                    # dirty-air cezası alır; böylece lider her tur bedava süre kazanmaz.
+                    if lap <= s.GRID_ADVANTAGE_FADE_LAPS and i < s.GRID_ADVANTAGE_SPREAD:
                         pos_fade = s.GRID_ADVANTAGE_POS_DECAY ** i
                         diff_scale = ot_difficulty ** s.GRID_ADVANTAGE_DIFFICULTY_POW
-                        bonus = s.CLEAN_AIR_ADVANTAGE_SEC
-                        if lap <= s.GRID_ADVANTAGE_FADE_LAPS:
-                            bonus += s.GRID_START_ADVANTAGE_SEC * (1.0 - (lap - 1) / s.GRID_ADVANTAGE_FADE_LAPS)
+                        bonus = s.GRID_START_ADVANTAGE_SEC * (1.0 - (lap - 1) / s.GRID_ADVANTAGE_FADE_LAPS)
                         lap_time -= bonus * diff_scale * pos_fade
 
                     deg = s.WEAR_TIME_COEFF * st["wear_pct"]
@@ -389,6 +418,9 @@ class LapRaceEngine:
                     if "Bare Canvas" in st["perks"] and st["wear_pct"] > 0.5:
                         deg *= 0.6
 
+                    # Pit kaybı hariç tutulur; geçiş buff'ı pit stop artefaktından değil,
+                    # pist üstündeki gerçek tempo/lastik farkından beslensin.
+                    st["last_lap_time"] = lap_time + deg + repair_loss + inc_loss + battle_loss
                     expected_time = st["cumulative_time"] + lap_time + deg + pit_loss + repair_loss + inc_loss + battle_loss
 
                     if i > 0:
@@ -398,6 +430,15 @@ class LapRaceEngine:
 
                         # Aerodinamik takip etkileri: yalnızca normal seyirde (pit/onarım yokken)
                         # ve gerçekten arkadayken (öndeki araçtan geride) işler.
+                        ahead_impeded = (
+                            ahead.get("pit_loss_this_lap", 0.0) > 0
+                            or ahead.get("repair_loss_this_lap", 0.0) > 0
+                            or ahead.get("incident_loss_this_lap", 0.0) > 0
+                        )
+                        if gap_to_ahead <= 0 and pit_loss == 0 and not ahead_impeded:
+                            expected_time = ahead_time + s.MIN_FOLLOW_GAP
+                            gap_to_ahead = expected_time - ahead_time
+
                         if gap_to_ahead > 0 and pit_loss == 0 and not st.get("pending_repair"):
                             drs_eligible = lap >= s.DRS_FROM_LAP and wetness < s.DRS_WET_CUTOFF
 
@@ -410,12 +451,12 @@ class LapRaceEngine:
                             if drs_eligible and gap_to_ahead <= s.DRS_ACTIVATION_GAP:
                                 expected_time -= s.DRS_TIME_GAIN
 
-                            # 3) Kirli hava: öndeki araca çok yakınsa virajlarda downforce
-                            #    kaybeder ve tempo düşer. Yakınlık arttıkça (gap küçüldükçe)
-                            #    kayıp büyür; bu da peşe takılıp geçememe hissini yaratır.
-                            if gap_to_ahead <= s.DIRTY_AIR_GAP:
+                            # 3) Kirli hava: 1-2 sn yakın takipte hissedilir ama her tur
+                            #    üst üste yazılmaz; cooldown hızlı aracın tekrar kapanmasına izin verir.
+                            if gap_to_ahead <= s.DIRTY_AIR_GAP and st["dirty_air_cooldown"] == 0:
                                 proximity = 1.0 - (gap_to_ahead / s.DIRTY_AIR_GAP)
                                 expected_time += s.DIRTY_AIR_MAX_LOSS * proximity
+                                st["dirty_air_cooldown"] = s.DIRTY_AIR_COOLDOWN_LAPS
 
                             # 4) Fiziksel minimum: iki araç aynı saniyede aynı noktada olamaz.
                             if expected_time - ahead_time < s.MIN_FOLLOW_GAP:
@@ -437,7 +478,7 @@ class LapRaceEngine:
                     ahead, behind = track_order[i-1], track_order[i]
                     gap = behind["cumulative_time"] - ahead["cumulative_time"]
 
-                    if 0 < gap <= 1.2:
+                    if 0 < gap <= s.BATTLE_WINDOW:
                         # DRS yalnızca 1.0sn içindeyse sollama şansına katkı verir.
                         pair_drs = drs_eligible and gap <= s.DRS_ACTIVATION_GAP
                         if random.random() < s.BATTLE_COLLISION_BASE * battle_mult:
@@ -453,8 +494,8 @@ class LapRaceEngine:
 
                         elif self._overtake_success(behind, ahead, ot_difficulty, pair_drs, ot_bonus):
                             track_order[i-1], track_order[i] = behind, ahead
-                            behind["cumulative_time"] = ahead["cumulative_time"] - 0.2
-                            ahead["cumulative_time"] += 0.4
+                            behind["cumulative_time"] = ahead["cumulative_time"] - 0.05
+                            ahead["cumulative_time"] += 0.15
 
                             if i <= 10:
                                 log(lap, "OVERTAKE",

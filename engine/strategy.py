@@ -45,9 +45,10 @@ def plan_strategies(grid_ids: List[str], forecast: Dict[str, Any], num_laps: int
         if isinstance(d_id, list):
              d_id = d_id[0]
 
-        # Gridin gerisindekiler kaybedecek bir şeyi olmadığından biraz daha sık risk alır
+        # Gridin gerisindekiler kaybedecek bir şeyi olmadığından biraz daha sık risk alır.
+        # Bu bonus küçük tutulur; aksi halde arka sıra stratejileri fazla sık overcut/undercut kazandırır.
         back_of_grid = idx >= len(grid_ids) * 0.6
-        risky = r.random() < (settings.RISKY_STRATEGY_PROB + (0.12 if back_of_grid else 0.0))
+        risky = r.random() < (settings.RISKY_STRATEGY_PROB + (0.04 if back_of_grid else 0.0))
 
         wet_bias = 0.0
         reaction_lag = settings.WEATHER_REACTION_LAG
@@ -64,7 +65,7 @@ def plan_strategies(grid_ids: List[str], forecast: Dict[str, Any], num_laps: int
                     tag = "erken-ıslak kumarı"
                 else:
                     wet_bias = settings.GAMBLER_WET_BIAS    # slick'te uzun kal
-                    reaction_lag = settings.WEATHER_REACTION_LAG + 2
+                    reaction_lag = settings.WEATHER_REACTION_LAG + 1
                     tag = "slick kumarı"
             elif choice < 0.78:
                 kind = "two_stop"
@@ -86,25 +87,7 @@ def apply_qualifying_tire_rule(strategies: Dict[str, Any],
                                q3_tire_choices: Dict[str, str],
                                forecast: Dict[str, Any] = None) -> None:
     """
-    Q3'e kalan pilotlarin kuru start lastigi kuralini mevcut strateji planina uygular.
-    plan_strategies() dict dondurur, eski demolar ise dogrudan stint listesi verebilir.
+    Modern F1'de Q3 lastigiyle yarisa baslama kurali yok.
+    Bu fonksiyon geriye donuk uyumluluk icin tutulur, fakat stratejiyi degistirmez.
     """
-    forecast = forecast or {}
-    if forecast.get("rain_prob", 0.0) > 0.6:
-        return
-
-    dry_compounds = {"soft", "medium", "hard"}
-    for d_id, tire in q3_tire_choices.items():
-        if tire not in dry_compounds:
-            continue
-
-        strategy = strategies.get(d_id)
-        if isinstance(strategy, dict):
-            plan = strategy.get("plan")
-        elif isinstance(strategy, list):
-            plan = strategy
-        else:
-            continue
-
-        if plan:
-            plan[0]["compound"] = tire
+    return
