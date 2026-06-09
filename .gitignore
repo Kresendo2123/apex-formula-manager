@@ -1,0 +1,29 @@
+# --- Sanal ortam (paylaşılmaz, herkes kendi kurar) ---
+venv/
+.venv/
+env/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# --- IDE ---
+.idea/
+.vscode/
+
+# --- İşletim sistemi / çöp ---
+__MACOSX/
+.DS_Store
+Thumbs.db
+
+# --- Claude Code yerel verisi ---
+.claude/
+
+# --- Üretilen raporlar (simülasyon çıktısı, yeniden üretilebilir) ---
+*.xlsx
+
+# --- Geçici deney dosyaları ---
+_tmp_*.py
