@@ -4,7 +4,7 @@ SEED_TEAMS = [
     {"id": "T_MER", "name": "Mercedes", "lead_driver_id": "D_ANT", "second_driver_id": "D_RUS", "car_id": "C_MER"},
     {"id": "T_FER", "name": "Ferrari", "lead_driver_id": "D_LEC", "second_driver_id": "D_HAM", "car_id": "C_FER"},
     {"id": "T_MCL", "name": "McLaren", "lead_driver_id": "D_NOR", "second_driver_id": "D_PIA", "car_id": "C_MCL"},
-    {"id": "T_RBR", "name": "Red Bull", "lead_driver_id": "D_VER", "second_driver_id": "D_TSU", "car_id": "C_RBR"},
+    {"id": "T_RBR", "name": "Red Bull", "lead_driver_id": "D_VER", "second_driver_id": "D_HAD", "car_id": "C_RBR"},
     {"id": "T_AST", "name": "Aston Martin", "lead_driver_id": "D_ALO", "second_driver_id": "D_STR", "car_id": "C_AST"},
     {"id": "T_ALP", "name": "Alpine", "lead_driver_id": "D_GAS", "second_driver_id": "D_DOO", "car_id": "C_ALP"},
     {"id": "T_HAS", "name": "Haas", "lead_driver_id": "D_BEA", "second_driver_id": "D_OCO", "car_id": "C_HAS"},
@@ -25,7 +25,7 @@ SEED_DRIVERS = [
     {"id": "D_PIA", "team_id": "T_MCL", "name": "Piastri", "pace": 92, "consistency": 77, "attack_defense": 95, "tire_management": 81, "potential": 97},
 
     {"id": "D_VER", "team_id": "T_RBR", "name": "Verstappen", "pace": 97, "consistency": 88, "attack_defense": 96, "tire_management": 82, "potential": 94},
-    {"id": "D_TSU", "team_id": "T_RBR", "name": "Hadjar", "pace": 85, "consistency": 71, "attack_defense": 81, "tire_management": 82, "potential": 86},
+    {"id": "D_HAD", "team_id": "T_RBR", "name": "Hadjar", "pace": 85, "consistency": 71, "attack_defense": 81, "tire_management": 82, "potential": 86},
 
     {"id": "D_ALO", "team_id": "T_AST", "name": "Alonso", "pace": 91, "consistency": 99, "attack_defense": 87, "tire_management": 85, "potential": 75},
     {"id": "D_STR", "team_id": "T_AST", "name": "Stroll", "pace": 77, "consistency": 84, "attack_defense": 77, "tire_management": 73, "potential": 78},
@@ -120,8 +120,11 @@ SEED_TRACKS = [
      "req_driver_skill": 0.25, "weather_volatility": 0.10, "num_laps": 70, "base_lap_time": 80.0, "pit_loss": 20.0},
 
     # 14. Belçika (Spa): ~1m48s, ~20s pit loss (çok uzun tur)
+    # overtaking_difficulty açık verildi: formül (req_grip ağırlıklı) Spa'yı 0.57'ye koyuyordu,
+    # oysa Spa gerçekte uzun DRS düzlükleriyle geçişe en açık pistlerden (Kemmel straight).
     {"id": "TRK_14", "name": "Belgium (Spa)", "req_top_speed": 0.45, "req_acceleration": 0.20, "req_grip": 0.35,
-     "req_driver_skill": 0.25, "weather_volatility": 0.30, "num_laps": 44, "base_lap_time": 108.0, "pit_loss": 20.0},
+     "req_driver_skill": 0.25, "weather_volatility": 0.30, "num_laps": 44, "base_lap_time": 108.0, "pit_loss": 20.0,
+     "overtaking_difficulty": 0.45},
      
     # 15. Hollanda (Zandvoort): ~1m13s, ~20s pit loss
     {"id": "TRK_15", "name": "Netherlands (Zandvoort)", "req_top_speed": 0.15, "req_acceleration": 0.30,

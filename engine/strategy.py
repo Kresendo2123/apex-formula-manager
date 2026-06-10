@@ -5,11 +5,15 @@ from typing import List, Dict, Any
 def _make_dry_plan(kind: str, num_laps: int) -> List[Dict[str, Any]]:
     """Kuru lastik planı üretir. Çoğu pilot 'conv' (tek-stop) kullanır."""
     if kind == "two_stop":
-        third = max(1, num_laps // 3)
+        # Stint boyları bileşim ömrüne göre: soft kısa tutulur (uçurum 0.72'den önce
+        # pite girilsin), hard en uzun stinti taşır. Eski eşit-üçe-bölme soft'u
+        # uçurumun çok ötesine taşıyıp agresif planı intihara çeviriyordu.
+        first = max(1, round(num_laps * 0.26))
+        second = max(1, round(num_laps * 0.36))
         return [
-            {"compound": "soft", "laps": third},
-            {"compound": "medium", "laps": third},
-            {"compound": "hard", "laps": num_laps - 2 * third},
+            {"compound": "soft", "laps": first},
+            {"compound": "medium", "laps": second},
+            {"compound": "hard", "laps": num_laps - first - second},
         ]
     if kind == "offset":
         # Ters strateji: uzun ilk stint (hard), sonra medium -> farklı pencere/track position
@@ -91,3 +95,67 @@ def apply_qualifying_tire_rule(strategies: Dict[str, Any],
     Bu fonksiyon geriye donuk uyumluluk icin tutulur, fakat stratejiyi degistirmez.
     """
     return
+
+
+# -----------------------------------------------------------------------------
+# YARIŞ ÖNCESİ STRATEJİ MENÜSÜ (oyuncu seçimi — yarış içi etkileşim YOK)
+# Oyuncuya 3-5 "strateji kartı" sunulur; seçim yarış öncesi sabitlenir, yarış
+# içindeki tepkileri (hava pitleri vb.) seçilen kartın karakteri (wet_bias,
+# reaction_lag) otomatik yönetir. Yağmur olasılığı TAHMİN olarak karta yansır
+# (gerçek F1'de takımlar radar görür); kumar kartları açıkça "riskli ama ödüllü"
+# diye etiketlenir — böylece seçim bilgilendirilmiş, adil bir kumardır.
+# -----------------------------------------------------------------------------
+
+def build_strategy_options(forecast: Dict[str, Any], num_laps: int, settings) -> List[Dict[str, Any]]:
+    """Yarış-öncesi strateji kartlarını üretir (UI/test bu listeden seçer)."""
+    rain_prob = forecast.get("rain_prob", 0.0)
+    options = [
+        {
+            "id": "safe_1stop",
+            "label": "Güvenli 1-stop (M→H)",
+            "desc": "Az pit = az risk (yavaş pit / trafik). Stint sonlarında tempo düşebilir.",
+            "plan": _make_dry_plan("conv", num_laps),
+            "wet_bias": 0.0, "reaction_lag": 0, "risk": "düşük",
+        },
+        {
+            "id": "aggressive_2stop",
+            "label": "Agresif 2-stop (S→M→H)",
+            "desc": "Taze lastik temposu ve sollama gücü; ekstra pit riski + soft uçurumu riski.",
+            "plan": _make_dry_plan("two_stop", num_laps),
+            "wet_bias": 0.0, "reaction_lag": settings.WEATHER_REACTION_LAG, "risk": "orta",
+        },
+        {
+            "id": "offset",
+            "label": "Ters strateji (H→M)",
+            "desc": "Uzun ilk stint; SC/VSC pencerene denk gelirse büyük kazanç, gelmezse vasat.",
+            "plan": _make_dry_plan("offset", num_laps),
+            "wet_bias": 0.0, "reaction_lag": settings.WEATHER_REACTION_LAG, "risk": "orta",
+        },
+    ]
+    if rain_prob >= 0.25:
+        options.append({
+            "id": "weather_eager",
+            "label": f"Tedbirli ıslak plan (yağış ~%{rain_prob * 100:.0f})",
+            "desc": "Yağmur gelirse ıslak lastiğe İLK geçen sen olursun; gelmezse erken pit kaybı.",
+            "plan": _make_dry_plan("conv", num_laps),
+            "wet_bias": settings.EAGER_WET_BIAS, "reaction_lag": 0, "risk": "orta",
+        })
+        options.append({
+            "id": "slick_gamble",
+            "label": f"Slick kumarı (yağış ~%{rain_prob * 100:.0f})",
+            "desc": "Hafif yağmurda pite girmeyip pozisyon kazanırsın; sağanakta çok kaybedersin.",
+            "plan": _make_dry_plan("conv", num_laps),
+            "wet_bias": settings.GAMBLER_WET_BIAS,
+            "reaction_lag": settings.WEATHER_REACTION_LAG + 1, "risk": "yüksek",
+        })
+    return options
+
+
+def apply_choice(strategies: Dict[str, Any], d_id: str, option: Dict[str, Any]) -> None:
+    """Seçilen strateji kartını pilotun yarış stratejisine işler (AI varsayılanını ezer)."""
+    strategies[d_id] = {
+        "plan": [dict(stint) for stint in option["plan"]],
+        "wet_bias": option["wet_bias"],
+        "reaction_lag": option["reaction_lag"],
+        "tag": option["id"],
+    }

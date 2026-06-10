@@ -5,6 +5,9 @@ from typing import List, Dict, Any, Optional
 # Caution (neutralizasyon) şiddet sıralaması
 _CAUTION_RANK = {None: 0, "VSC": 1, "SC": 2, "RED": 3}
 
+# Mekanik DNF sebep çeşitliliği (anlatı/rapor zenginliği; mekanik etki aynı)
+_MECH_FAILURES = ["motor", "şanzıman", "hidrolik", "fren", "elektrik", "soğutma"]
+
 
 class LapRaceEngine:
     """
@@ -186,20 +189,23 @@ class LapRaceEngine:
 
     def _resolve_mech(self, st, lap, num_laps, log):
         s = self.settings
+        detail = random.choice(_MECH_FAILURES)
         if lap >= num_laps * s.LIMP_WINDOW and random.random() < s.LATE_LIMP_PROB:
             st["pace_penalty"] *= (1 + s.LIMP_PACE_PENALTY)
-            log(lap, "LIMP", f"Mekanik sorun: {st['driver_id']} topallayarak devam (hız/sıra kaybı)", driver=st["driver_id"])
+            log(lap, "LIMP", f"Mekanik sorun ({detail}): {st['driver_id']} topallayarak devam (hız/sıra kaybı)",
+                driver=st["driver_id"])
             return None
         if random.random() < s.MECH_RETIRE_PROB:
             st["running"] = False
             st["dnf_lap"] = lap
             st["dnf_cause"] = "mech"
-            log(lap, "DNF", f"DNF (arıza): {st['driver_id']}", driver=st["driver_id"], cause="mech")
+            st["dnf_detail"] = detail
+            log(lap, "DNF", f"DNF ({detail} arızası): {st['driver_id']}", driver=st["driver_id"], cause="mech")
             return "VSC" if random.random() < s.VSC_FROM_MECH_PROB else None
         st["pending_repair"] = True
         st["pace_penalty"] *= (1 + s.DAMAGE_PACE_PENALTY * 0.5)
         st["repairs"] += 1
-        log(lap, "REPAIR", f"Parça değişimi pit'i: {st['driver_id']} devam ediyor", driver=st["driver_id"])
+        log(lap, "REPAIR", f"Parça değişimi pit'i ({detail}): {st['driver_id']} devam ediyor", driver=st["driver_id"])
         return None
 
     def _bunch_field(self, track_order, anchor_extra: float, gap: float):
@@ -211,15 +217,70 @@ class LapRaceEngine:
             st["cumulative_time"] = base + i * gap
 
     def _tyre_race_score(self, st) -> float:
-        comp = self.settings.TYRE_COMPOUNDS[st["current_compound"]]
-        return comp["pace"] - st["wear_pct"] * 0.08
+        s = self.settings
+        comp = s.TYRE_COMPOUNDS[st["current_compound"]]
+        # Aşınma etkisi bileşimin kendi eğrisiyle ölçeklenir (medium = 1.0 taban,
+        # OVERTAKE_TYRE_STATE_SCALE yeniden ayar gerektirmez). Uçurumu geçen lastik
+        # sollamaya karşı ekstra savunmasızdır.
+        severity = comp.get("wear_time_coeff", s.WEAR_TIME_COEFF) / s.WEAR_TIME_COEFF
+        score = comp["pace"] - st["wear_pct"] * 0.08 * severity
+        if st["wear_pct"] > comp.get("cliff", s.WEAR_CLIFF):
+            score -= 0.06
+        return score
+
+    def _next_plan_switch(self, st, lap, num_laps):
+        """Plandaki bir sonraki bileşim değişimini döner: (yeni_bileşim, kaç tur sonra)."""
+        cur = st["compound_by_lap"].get(lap, st["current_compound"])
+        for L in range(lap + 1, num_laps + 1):
+            if st["compound_by_lap"][L] != cur:
+                return st["compound_by_lap"][L], L - lap
+        return None, None
+
+    def _caution_pit(self, st, lap, num_laps, wetness, log, track, discount, label) -> float:
+        """SC/VSC altında ucuz pit penceresi (gerçek F1 strateji temel taşı).
+        Yalnız 'zaten durması yakın' araç girer: hava lastiği yanlışsa (zorunlu),
+        lastik aşınmışsa veya planlı stop yakındaysa. Taze lastikli araç ucuz diye
+        girmez; yeni pitlenmiş araç tekrar girmez."""
+        s = self.settings
+        desired = self._desired_compound(
+            st["compound_by_lap"][lap], wetness, st["wet_bias"], st["current_compound"])
+        weather_switch = self._compound_category(desired) != self._compound_category(st["current_compound"])
+        recently = lap - st["last_pit_lap"] < s.SC_PIT_MIN_GAP_LAPS
+        worn = st["wear_pct"] >= s.SC_PIT_WEAR_MIN
+        next_comp, laps_to_switch = self._next_plan_switch(st, lap, num_laps)
+        upcoming = laps_to_switch is not None and laps_to_switch <= s.SC_PIT_LOOKAHEAD
+        if not (weather_switch or ((worn or upcoming) and not recently)):
+            return 0.0
+        if weather_switch:
+            new_comp = desired
+        elif upcoming:
+            new_comp = next_comp           # planlı stop öne çekilir
+        else:
+            new_comp = next_comp or st["current_compound"]  # son stintte taze set
+        base_loss = getattr(track, "pit_loss", None) or s.PIT_LANE_LOSS
+        pit_loss = max(0.0, base_loss * discount + random.gauss(0, s.PIT_TIME_SIGMA))
+        st["current_compound"] = new_comp
+        st["wear_pct"] = 0.0
+        st["pits"] += 1
+        st["last_pit_lap"] = lap
+        st["pending_switch_lap"] = None
+        st["loss_pit"] += pit_loss
+        log(lap, "PIT", f"PIT ({label} altında, {new_comp}): {st['driver_id']} ucuz pit fırsatını kullandı",
+            driver=st["driver_id"], compound=new_comp)
+        return pit_loss
 
     def _overtake_success(self, attacker, defender, ot_difficulty, drs_on, extra_bonus=0.0) -> bool:
         s = self.settings
         pilot_diff = (attacker["attack_defense"] - defender["attack_defense"]) / 100.0 * 0.15
         power_diff = (attacker["base_power"] - defender["base_power"]) * 0.012
-        pace_delta = defender.get("last_lap_time", 0.0) - attacker.get("last_lap_time", 0.0)
-        pace_bonus = max(-0.08, min(0.16, pace_delta * s.OVERTAKE_PACE_DELTA_SCALE))
+        # TEMİZ tur farkı: battle/kaza/onarım kayıpları hariç (clean_lap_time).
+        # Eski model last_lap_time kullanıyordu; atak yapanın kendi mücadele
+        # kayıpları kendi pace'ini kirletiyordu (hücum etmek hücum gücünü düşürüyordu).
+        pace_delta = (defender.get("clean_lap_time") or defender.get("last_lap_time", 0.0)) \
+                   - (attacker.get("clean_lap_time") or attacker.get("last_lap_time", 0.0))
+        # Süperlineer ödül: küçük farklar mütevazı, büyük farklar orantıdan fazla kazandırır
+        pace_bonus = pace_delta * s.OVERTAKE_PACE_DELTA_SCALE * (1.0 + abs(pace_delta) * s.OVERTAKE_PACE_DELTA_CURVE)
+        pace_bonus = max(-0.10, min(s.OVERTAKE_PACE_BONUS_CAP, pace_bonus))
         tyre_state_diff = self._tyre_race_score(attacker) - self._tyre_race_score(defender)
         tyre_bonus = max(-0.05, min(0.08, tyre_state_diff * s.OVERTAKE_TYRE_STATE_SCALE))
 
@@ -231,15 +292,29 @@ class LapRaceEngine:
         prob += extra_bonus
 
         max_prob = 0.08 + (1 - ot_difficulty) * 0.42
+        # Büyük pace farkında tavan gevşer: backmarker çok daha hızlı aracı
+        # zor pistte bile sonsuza dek arkasında tutamamalı.
+        if pace_bonus > 0:
+            max_prob += pace_bonus * s.OVERTAKE_CAP_RELAX
         return random.random() < max(0.003, min(max_prob, prob))
 
     # ---------------------------------------------------------------- ana döngü
+
+    def roll_race_conditions(self) -> Dict[str, float]:
+        """Yarış günü koşullarını üretir. Yarış ÖNCESİ çağrılıp oyuncuya gösterilebilir
+        ve simulate_race'e conditions olarak geçirilebilir (strateji seçimine girdi)."""
+        s = self.settings
+        return {
+            "wear_day_mult": random.uniform(1 - s.RACE_DAY_WEAR_VAR, 1 + s.RACE_DAY_WEAR_VAR),
+            "ot_day_delta": random.gauss(0, s.RACE_DAY_OT_SIGMA),
+        }
 
     def simulate_race(self, grid_order: List[str], profiles: Dict[str, Dict[str, Any]],
                       track, num_laps: Optional[int] = None,
                       strategies: Optional[Dict[str, Any]] = None,
                       form: Optional[Dict[str, float]] = None,
-                      forecast: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                      forecast: Optional[Dict[str, Any]] = None,
+                      conditions: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         s = self.settings
         form = form or {}
         strategies = strategies or {}
@@ -250,8 +325,14 @@ class LapRaceEngine:
             forecast = self.make_forecast(track, num_laps)
         weather, weather_peak, rained = self._realize_weather(forecast, num_laps)
 
-        ot_difficulty = self._track_overtaking_difficulty(track)
-        tyre_severity = self._track_tyre_severity(track)
+        # Yarış günü koşulları: pist sıcaklığı/rüzgar gibi etmenler aşınmayı ve geçiş
+        # kolaylığını yarıştan yarışa küçük oynatır (anti-meta; ortalama denge korunur).
+        # Dışarıdan verilebilir (conditions param) — oyunda yarış öncesi "koşul raporu"
+        # olarak oyuncuya gösterilip strateji seçimine girdi olur.
+        cond = conditions or self.roll_race_conditions()
+        ot_difficulty = max(0.05, min(0.95, self._track_overtaking_difficulty(track) + cond["ot_day_delta"]))
+        wear_day_mult = cond["wear_day_mult"]
+        tyre_severity = self._track_tyre_severity(track) * wear_day_mult
         events: List[Dict[str, Any]] = []
 
         def log(lap, etype, msg, **kw):
@@ -272,7 +353,7 @@ class LapRaceEngine:
             else:
                 plan = self._default_strategy(num_laps)
                 wet_bias, reaction_lag = 0.0, s.WEATHER_REACTION_LAG
-            compound_by_lap = self._expand_plan(plan, num_laps)
+            compound_by_lap = self._expand_plan(plan, num_laps, p.get("tyre_wear_coeff", 1.0))
             states[d_id] = {
                 "driver_id": d_id, "team_id": p["team_id"], "grid_pos": grid_idx + 1,
                 "base_power": p["base_power"], "consistency": p["consistency"],
@@ -289,8 +370,11 @@ class LapRaceEngine:
                 "pace_penalty": 1.0, "pending_repair": False, "incident_time_loss": 0.0, "repairs": 0,
                 "battle_time_loss": 0.0, "pit_loss_this_lap": 0.0,
                 "repair_loss_this_lap": 0.0, "incident_loss_this_lap": 0.0,
-                "last_lap_time": 0.0,
-                "dirty_air_cooldown": 0,
+                "last_lap_time": 0.0, "clean_lap_time": 0.0,
+                "dirty_air_cooldown": 0, "last_pit_lap": -99,
+                # Yarış sonu analiz için kayıp/kazanç dökümü (saniye, birikimli)
+                "loss_pit": 0.0, "loss_repair": 0.0, "loss_incident": 0.0,
+                "loss_battle": 0.0, "loss_dirty_air": 0.0, "gain_aero": 0.0,
             }
 
         track_order = [states[d_id] for d_id in grid_order]
@@ -302,8 +386,48 @@ class LapRaceEngine:
         prev_band = self._weather_label(weather[1] if len(weather) > 1 else 0.0)
 
         log(0, "FORECAST", f"Hava tahmini: {forecast['label']}")
+        if wear_day_mult > 1.05:
+            cond_label = "sıcak pist — yüksek lastik aşınması"
+        elif wear_day_mult < 0.95:
+            cond_label = "serin pist — düşük lastik aşınması"
+        else:
+            cond_label = "normal pist sıcaklığı"
+        log(0, "CONDITIONS", f"Pist koşulları: {cond_label}", wear_mult=round(wear_day_mult, 3))
         log(0, "START", f"Yarış başladı — pole: {prev_leader} | başlangıç: {prev_band} | {num_laps} tur",
             driver=prev_leader)
+
+        # Perk görünürlüğü: oyuncu hangi perklerin sahada olduğunu görsün
+        # (görünmeyen modifier adaletsiz hissettirir, görünen aynı modifier hikâyedir)
+        perk_holders = [f"{st['driver_id']} [{', '.join(st['perks'])}]"
+                        for st in track_order if st["perks"]]
+        if perk_holders:
+            log(0, "PERKS", "Sahadaki perkler: " + " | ".join(perk_holders))
+
+        # Kalkış (launch) varyansı: ışıklar söndüğünde refleks farkı sıralamayı
+        # değiştirebilir. Consistency düşük pilot startı daha sık batırır;
+        # Clutch Start perki kötü kalkışı yumuşatır. Yavaş araç iyi kalksa da
+        # pace'i yetmiyorsa ilerleyen turlarda pozisyonu doğal olarak geri verir.
+        for grid_idx, st in enumerate(track_order):
+            # Grid slotları arası fiziksel mesafe: kalkış deltası bununla yarışır,
+            # böylece süper kalkış 1-3 sıra kazandırır ama P15'i lider yapamaz.
+            st["cumulative_time"] += grid_idx * s.GRID_SLOT_SPACING
+            sigma = s.LAUNCH_SIGMA * (1 + (100 - st["consistency"]) / 100.0)
+            launch_delta = random.gauss(0, sigma)
+            if "Clutch Start" in st["perks"] and launch_delta > 0:
+                launch_delta *= 0.4
+            launch_delta = max(-s.LAUNCH_MAX, min(s.LAUNCH_MAX, launch_delta))
+            st["cumulative_time"] += launch_delta
+            if launch_delta <= -1.0:
+                log(1, "LAUNCH", f"🚀 Müthiş kalkış: {st['driver_id']} ({-launch_delta:.1f}s kazandı)",
+                    driver=st["driver_id"])
+            elif launch_delta >= 1.0:
+                log(1, "LAUNCH", f"🐌 Kötü kalkış: {st['driver_id']} ({launch_delta:.1f}s kaybetti)",
+                    driver=st["driver_id"])
+        track_order.sort(key=lambda x: x["cumulative_time"])
+
+        # Tur tur pozisyon geçmişi (analiz + ileride replay/sunum katmanı için).
+        # index 0 = kalkış sonrası diziliş, index L = L. tur sonu diziliş.
+        lap_positions = [[st["driver_id"] for st in track_order]]
 
         track_base_time = getattr(track, "base_lap_time", None) or s.BASE_LAP_TIME
 
@@ -365,14 +489,25 @@ class LapRaceEngine:
 
             # 2) Tur süreleri
             if sc_laps > 0:
+                # SC: herkes aynı SC temposunda -> geçiş yok, aralıklar korunur.
+                # Ucuz pit penceresi açık: pitlenen araç kuyruğun gerisine düşer
+                # (pit kaybı cumulative_time'a eklenince SC dizilişinde geri kayar).
                 sc_time = track_base_time * s.SC_SPEED_MULT
                 for st in track_order:
-                    st["cumulative_time"] += sc_time
+                    pit_loss = self._caution_pit(st, lap, num_laps, wetness, log, track,
+                                                 s.SC_PIT_DISCOUNT, "SC")
+                    st["cumulative_time"] += sc_time + pit_loss
                     st["wear_pct"] += s.TYRE_COMPOUNDS[st["current_compound"]]["wear_rate"] * st["tyre_wear_coeff"] * tyre_severity * 0.2
                     st["laps_completed"] = lap
             elif vsc_laps > 0:
+                # VSC: tüm araçlar AYNI yavaş turu döner -> aralıklar donar, geçiş olmaz.
+                # (Eski hali araç bazlı hızla yavaşlatıyordu; hızlı araç VSC altında
+                # zaman kazanıp sıralama değiştirebiliyordu — gerçekte yasak.)
+                vsc_time = track_base_time * s.VSC_SLOWDOWN
                 for st in track_order:
-                    st["cumulative_time"] += self._base_lap_time(st["base_power"], track) * s.VSC_SLOWDOWN
+                    pit_loss = self._caution_pit(st, lap, num_laps, wetness, log, track,
+                                                 s.VSC_PIT_DISCOUNT, "VSC")
+                    st["cumulative_time"] += vsc_time + pit_loss
                     st["laps_completed"] = lap
             else:
                 for i, st in enumerate(track_order):
@@ -393,6 +528,10 @@ class LapRaceEngine:
                     st["pit_loss_this_lap"] = pit_loss
                     st["repair_loss_this_lap"] = repair_loss
                     st["incident_loss_this_lap"] = inc_loss
+                    st["loss_pit"] += pit_loss
+                    st["loss_repair"] += repair_loss
+                    st["loss_incident"] += inc_loss
+                    st["loss_battle"] += battle_loss
 
                     comp = s.TYRE_COMPOUNDS[st["current_compound"]]
                     pace_pen, wear_mult = self._tyre_condition(st["current_compound"], wetness)
@@ -401,6 +540,15 @@ class LapRaceEngine:
                     lap_time = self._base_lap_time(st["base_power"], track)
                     lap_time *= (1 - comp["pace"]) * (1 - st["form"]) * (1 + pace_pen) * st["pace_penalty"]
                     lap_time *= (1 + random.gauss(0, self._lap_noise_sigma(st["consistency"])))
+
+                    # Rainmaster: profiller kuru (is_raining=False) kurulduğundan bu perk
+                    # dinamik yağmura motor içinde tepki verir (aksi halde hiç çalışmıyordu)
+                    if wetness >= 0.15 and "Rainmaster" in st["perks"]:
+                        lap_time *= (1 - s.RAINMASTER_WET_PACE)
+                        if not st.get("rainmaster_logged"):
+                            st["rainmaster_logged"] = True
+                            log(lap, "PERK", f"🌧️ Rainmaster devrede: {st['driver_id']} ıslak zeminde hızlanıyor",
+                                driver=st["driver_id"])
 
                     # Track-position avantajı sadece start fazında uygulanır.
                     # Kalıcı "clean air" bonusu yerine yakın takipteki araçlar aşağıda
@@ -411,15 +559,25 @@ class LapRaceEngine:
                         bonus = s.GRID_START_ADVANTAGE_SEC * (1.0 - (lap - 1) / s.GRID_ADVANTAGE_FADE_LAPS)
                         lap_time -= bonus * diff_scale * pos_fade
 
-                    deg = s.WEAR_TIME_COEFF * st["wear_pct"]
-                    if st["wear_pct"] > s.WEAR_CLIFF:
-                        deg += s.WEAR_CLIFF_COEFF * (st["wear_pct"] - s.WEAR_CLIFF)
+                    # Aşınma eğrisi bileşim bazlı: soft erken+sert uçurum, hard geç+yumuşak
+                    comp_tc = comp.get("wear_time_coeff", s.WEAR_TIME_COEFF)
+                    comp_cliff = comp.get("cliff", s.WEAR_CLIFF)
+                    deg = comp_tc * st["wear_pct"]
+                    if st["wear_pct"] > comp_cliff:
+                        deg += comp.get("cliff_coeff", s.WEAR_CLIFF_COEFF) * (st["wear_pct"] - comp_cliff)
                         
                     if "Bare Canvas" in st["perks"] and st["wear_pct"] > 0.5:
                         deg *= 0.6
+                        if not st.get("barecanvas_logged"):
+                            st["barecanvas_logged"] = True
+                            log(lap, "PERK", f"🛞 Bare Canvas devrede: {st['driver_id']} aşınmış lastikte hızını koruyor",
+                                driver=st["driver_id"])
 
                     # Pit kaybı hariç tutulur; geçiş buff'ı pit stop artefaktından değil,
                     # pist üstündeki gerçek tempo/lastik farkından beslensin.
+                    # clean_lap_time: sollama modeline giden TEMİZ pace (mücadele/kaza/onarım
+                    # kayıpları hariç) — atak yapanın kendi kayıpları kendi şansını düşürmesin.
+                    st["clean_lap_time"] = lap_time + deg
                     st["last_lap_time"] = lap_time + deg + repair_loss + inc_loss + battle_loss
                     expected_time = st["cumulative_time"] + lap_time + deg + pit_loss + repair_loss + inc_loss + battle_loss
 
@@ -446,16 +604,19 @@ class LapRaceEngine:
                             #    DRS'ten bağımsız ve ıslakta da geçerli.
                             if gap_to_ahead <= s.SLIPSTREAM_GAP:
                                 expected_time -= s.SLIPSTREAM_TIME_GAIN
+                                st["gain_aero"] += s.SLIPSTREAM_TIME_GAIN
                             # 2) DRS: yalnızca 1.0sn içinde ve kuru havada ek kazanç sağlar
                             #    (gerçek hayattaki "1 saniye" kuralı).
                             if drs_eligible and gap_to_ahead <= s.DRS_ACTIVATION_GAP:
                                 expected_time -= s.DRS_TIME_GAIN
+                                st["gain_aero"] += s.DRS_TIME_GAIN
 
                             # 3) Kirli hava: 1-2 sn yakın takipte hissedilir ama her tur
                             #    üst üste yazılmaz; cooldown hızlı aracın tekrar kapanmasına izin verir.
                             if gap_to_ahead <= s.DIRTY_AIR_GAP and st["dirty_air_cooldown"] == 0:
                                 proximity = 1.0 - (gap_to_ahead / s.DIRTY_AIR_GAP)
                                 expected_time += s.DIRTY_AIR_MAX_LOSS * proximity
+                                st["loss_dirty_air"] += s.DIRTY_AIR_MAX_LOSS * proximity
                                 st["dirty_air_cooldown"] = s.DIRTY_AIR_COOLDOWN_LAPS
 
                             # 4) Fiziksel minimum: iki araç aynı saniyede aynı noktada olamaz.
@@ -509,10 +670,12 @@ class LapRaceEngine:
                         # bitince BATTLE_TEMPO_DECAY ile kademeli olarak söner.
                         if (behind["running"] and ahead["running"]
                                 and gap <= s.BATTLE_WINDOW):
+                            # Tur kaybı sabit değil; her mücadele turu farklı sertliktedir
+                            battle_hit = random.uniform(s.BATTLE_TEMPO_LOSS_MIN, s.BATTLE_TEMPO_LOSS_MAX)
                             for car in (behind, ahead):
                                 car["battle_time_loss"] = min(
                                     s.MAX_BATTLE_TEMPO_LOSS,
-                                    car["battle_time_loss"] + s.BATTLE_TEMPO_LOSS
+                                    car["battle_time_loss"] + battle_hit
                                 )
                     i -= 1
 
@@ -554,9 +717,11 @@ class LapRaceEngine:
                     log(lap, "RESTART", "🟢 VSC bitti — yeşil bayrak")
                     
             track_order = sorted(track_order, key=lambda x: x["cumulative_time"])
+            lap_positions.append([st["driver_id"] for st in track_order])
 
         result = self._classify(track_order, dnf_states)
         result["events"] = events
+        result["lap_positions"] = lap_positions
         result["forecast"] = forecast
         result["weather_peak"] = weather_peak
         result["rained"] = rained
@@ -568,12 +733,18 @@ class LapRaceEngine:
         half = max(1, round(num_laps * 0.5))
         return [{"compound": "medium", "laps": half}, {"compound": "hard", "laps": num_laps - half}]
 
-    def _expand_plan(self, plan: List[Dict[str, Any]], num_laps: int) -> Dict[int, str]:
+    def _expand_plan(self, plan: List[Dict[str, Any]], num_laps: int,
+                     wear_coeff: float = 1.0) -> Dict[int, str]:
+        # Stint boyları aracın aşınma karakterine göre ölçeklenir: lastik yiyen araç
+        # erken pit eder, lastiğe nazik araç stinti uzatır (son stint kalanı taşır).
+        # Oyuncu strateji kartı seçtiğinde de "takım mühendisleri planı araca uyarlar".
+        eff = max(0.78, min(1.28, wear_coeff))
         compound_by_lap = {}
         lap = 1
         for idx, stint in enumerate(plan):
             is_last = idx == len(plan) - 1
-            end = num_laps if is_last else min(num_laps, lap + stint["laps"] - 1)
+            stint_laps = stint["laps"] if is_last else max(1, round(stint["laps"] / eff))
+            end = num_laps if is_last else min(num_laps, lap + stint_laps - 1)
             for L in range(lap, end + 1):
                 compound_by_lap[L] = stint["compound"]
             lap = end + 1
@@ -602,12 +773,20 @@ class LapRaceEngine:
         st["current_compound"] = desired
         st["wear_pct"] = 0.0
         st["pits"] += 1
+        st["last_pit_lap"] = lap
         st["pending_switch_lap"] = None
         if reason == "hava":
             log(lap, "PIT", f"PIT ({desired}, hava): {st['driver_id']}", driver=st["driver_id"], compound=desired)
             
+        # Pit süresi varyansı: normal dalgalanma + nadiren yavaş pit (sıkışan bijon vb.)
         pit_time_loss = getattr(track, "pit_loss", None) or s.PIT_LANE_LOSS
-        return pit_time_loss
+        pit_time_loss += random.gauss(0, s.PIT_TIME_SIGMA)
+        if random.random() < s.SLOW_PIT_PROB:
+            extra = random.uniform(s.SLOW_PIT_EXTRA_MIN, s.SLOW_PIT_EXTRA_MAX)
+            pit_time_loss += extra
+            log(lap, "SLOW_PIT", f"🔧 Yavaş pit (+{extra:.1f}s): {st['driver_id']} sıkışan bijon!",
+                driver=st["driver_id"])
+        return max(0.0, pit_time_loss)
 
     # ---------------------------------------------------------------- klasman
 
@@ -622,6 +801,15 @@ class LapRaceEngine:
                 "status": "FIN", "laps_completed": st["laps_completed"],
                 "total_time": round(st["cumulative_time"], 3),
                 "pits": st["pits"], "final_compound": st["current_compound"], "repairs": st["repairs"],
+                # Analiz: yarış içi kayıp/kazanç dökümü (saniye)
+                "loss_breakdown": {
+                    "pit": round(st.get("loss_pit", 0.0), 1),
+                    "repair": round(st.get("loss_repair", 0.0), 1),
+                    "incident": round(st.get("loss_incident", 0.0), 1),
+                    "battle": round(st.get("loss_battle", 0.0), 1),
+                    "dirty_air": round(st.get("loss_dirty_air", 0.0), 1),
+                    "aero_gain": round(st.get("gain_aero", 0.0), 1),
+                },
             })
             pos += 1
         for st in dnf_sorted:
@@ -629,7 +817,8 @@ class LapRaceEngine:
                 "driver_id": st["driver_id"], "team_id": st["team_id"], "position": pos,
                 "status": "DNF", "laps_completed": st["laps_completed"], "total_time": None,
                 "pits": st["pits"], "final_compound": st["current_compound"],
-                "dnf_cause": st["dnf_cause"], "repairs": st["repairs"],
+                "dnf_cause": st["dnf_cause"], "dnf_detail": st.get("dnf_detail"),
+                "repairs": st["repairs"],
             })
             pos += 1
         return {"classification": classification, "dnf_count": len(dnf_states)}

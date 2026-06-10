@@ -6,6 +6,18 @@ class RaceDirector:
     def __init__(self, settings):
         self.settings = settings
 
+    @staticmethod
+    def ideal_aero(track, settings) -> float:
+        """
+        Pistin İDEAL aero kademesi (sürekli değer, 1.0-5.0).
+        Grip talebinin (top_speed+grip içindeki) payından türetilir:
+        Monza (düzlük) ~1, Monaco (viraj) ~5, dengeli pistler ~3.
+        UI oyuncuya yuvarlanmış halini ipucu olarak gösterebilir.
+        """
+        g_share = track.req_grip / max(0.05, track.req_grip + track.req_top_speed)
+        ideal = 3.0 + (g_share - 0.5) * settings.AERO_IDEAL_SPREAD
+        return min(5.0, max(1.0, ideal))
+
     def build_profile(
             self, driver, car, track, aero_level: int, strategy: str, is_raining: bool
     ) -> Dict[str, Any]:
@@ -30,16 +42,20 @@ class RaceDirector:
         strat_mods = self.settings.STRATEGY_STINT_MODIFIER.get(
             strategy, self.settings.STRATEGY_STINT_MODIFIER["normal"]
         )
-        aero_top_speed = self.settings.AERO_TOP_SPEED_MODIFIER.get(aero_level, 1.0)
-        aero_grip = self.settings.AERO_GRIP_MODIFIER.get(aero_level, 1.0)
+        car_performance = (car.top_speed * track.req_top_speed) + (car.acceleration * track.req_acceleration) + (
+                    car.grip * track.req_grip)
 
-        eff_top_speed = car.top_speed * aero_top_speed
-        eff_grip = car.grip * aero_grip
-
-        car_performance = (eff_top_speed * track.req_top_speed) + (car.acceleration * track.req_acceleration) + (
-                    eff_grip * track.req_grip)
-        driver_performance = (eff_pace * strat_mods["pace"] * 0.5) + (eff_consistency * 0.3) + (
-                    eff_attack * 0.2)
+        # Aero uyumu: pistin ideal kademesinden uzaklaştıkça parabolik ceza.
+        # İdealde ceza yok; 1 kademe sapma ucuz, ters uç seçimi pahalı.
+        aero_mismatch = (aero_level - self.ideal_aero(track, self.settings)) ** 2
+        aero_penalty = min(self.settings.AERO_MISMATCH_MAX,
+                           self.settings.AERO_MISMATCH_COEFF * aero_mismatch)
+        car_performance *= (1 - aero_penalty)
+        # Stil pace çarpanı TÜM sürücü performansına uygulanır (eskiden yalnız
+        # eff_pace'e uygulanıyordu; etki o kadar küçük kalıyordu ki stil seçiminde
+        # pace tarafı hiç hissedilmiyor, takas tek yönlü "aşınma kazanır"a dönüyordu).
+        driver_performance = ((eff_pace * 0.5) + (eff_consistency * 0.3) + (
+                    eff_attack * 0.2)) * strat_mods["pace"]
 
         tire_wear = car.tire_consumption * strat_mods["tire_wear"] * (1 - (eff_tire_mgmt * 0.005))
         tyre_wear_coeff_val = (
@@ -53,7 +69,7 @@ class RaceDirector:
             tyre_wear_coeff_val = perk.modify_tire_wear(tyre_wear_coeff_val)
 
         base_risk = self.settings.BASE_DNF_CHANCE * 1000
-        reliability_penalty = (100 - car.reliability) * 2
+        reliability_penalty = (100 - car.reliability) * self.settings.RELIABILITY_RISK_SCALE
         consistency_penalty = (100 - eff_consistency) * strat_mods["crash_risk"]
         
         for perk in perk_instances:
