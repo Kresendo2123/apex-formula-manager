@@ -49,8 +49,9 @@ PTS = {1: 25, 2: 18, 3: 15, 4: 12, 5: 10, 6: 8, 7: 6, 8: 4, 9: 2, 10: 1}
 
 
 def pick(options, opt_id, fallback_id):
+    # Menü artık piste özel: her kart her pistte olmayabilir -> ilk karta düş
     by_id = {o["id"]: o for o in options}
-    return by_id.get(opt_id) or by_id[fallback_id]
+    return by_id.get(opt_id) or by_id.get(fallback_id) or options[0]
 
 
 def choose_for_team(team_id, options, rain_risky, hot_day):
@@ -66,13 +67,17 @@ def choose_for_team(team_id, options, rain_risky, hot_day):
             return pick(options, "aggressive_2stop", "aggressive_2stop")
         return pick(options, "offset", "offset")  # normal günde SC piyangosu kovala
     if team_id in MIDFIELD:
-        return pick(options, "weather_eager" if rain_risky else "offset", "offset")
+        if rain_risky:
+            # Fırsatçı: yağmur orta/geç yarışta bekleniyorsa KÖPRÜ kur (tek pit
+            # yağmurda); köprü penceresi uygun değilse tedbirli ıslak plana düş.
+            return pick(options, "rain_bridge", "weather_eager")
+        return pick(options, "offset", "offset")
     # alt takımlar: piyango — uç seçeneklerden rastgele
     lottery_ids = ["offset"]
     if hot_day:
         lottery_ids.append("aggressive_2stop")
     if rain_risky:
-        lottery_ids += ["slick_gamble", "weather_eager"]
+        lottery_ids += ["slick_gamble", "weather_eager", "rain_bridge"]
     return pick(options, random.choice(lottery_ids), "offset")
 
 
@@ -102,11 +107,11 @@ def run_scenario(use_choices, n_seasons, drivers, cars, teams, tracks, s):
             fc = engine.make_forecast(track, num_laps)
             # Koşullar yarış ÖNCESİ üretilir (oyunda oyuncuya gösterilecek rapor)
             conditions = engine.roll_race_conditions()
-            strat = plan_strategies(grid, fc, num_laps, s)
+            strat = plan_strategies(grid, fc, num_laps, s, track=track)
             apply_qualifying_tire_rule(strat, q3, fc)
 
             if use_choices:
-                options = build_strategy_options(fc, num_laps, s)
+                options = build_strategy_options(fc, num_laps, s, track=track)
                 rain_risky = fc.get("rain_prob", 0.0) >= 0.25
                 hot_day = conditions["wear_day_mult"] > 1.05
                 for d_id, drv in drivers.items():

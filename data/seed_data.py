@@ -6,12 +6,12 @@ SEED_TEAMS = [
     {"id": "T_MCL", "name": "McLaren", "lead_driver_id": "D_NOR", "second_driver_id": "D_PIA", "car_id": "C_MCL"},
     {"id": "T_RBR", "name": "Red Bull", "lead_driver_id": "D_VER", "second_driver_id": "D_HAD", "car_id": "C_RBR"},
     {"id": "T_AST", "name": "Aston Martin", "lead_driver_id": "D_ALO", "second_driver_id": "D_STR", "car_id": "C_AST"},
-    {"id": "T_ALP", "name": "Alpine", "lead_driver_id": "D_GAS", "second_driver_id": "D_DOO", "car_id": "C_ALP"},
+    {"id": "T_ALP", "name": "Alpine", "lead_driver_id": "D_GAS", "second_driver_id": "D_COL", "car_id": "C_ALP"},
     {"id": "T_HAS", "name": "Haas", "lead_driver_id": "D_BEA", "second_driver_id": "D_OCO", "car_id": "C_HAS"},
     {"id": "T_WIL", "name": "Williams", "lead_driver_id": "D_SAI", "second_driver_id": "D_ALB", "car_id": "C_WIL"},
     {"id": "T_VCB", "name": "Racing Bulls", "lead_driver_id": "D_LIN", "second_driver_id": "D_LAW", "car_id": "C_VCB"},
     {"id": "T_AUD", "name": "Audi", "lead_driver_id": "D_HUL", "second_driver_id": "D_BOR", "car_id": "C_AUD"},
-    {"id": "T_CAD", "name": "Cadillac", "lead_driver_id": "D_HER", "second_driver_id": "D_SAR", "car_id": "C_CAD"}
+    {"id": "T_CAD", "name": "Cadillac", "lead_driver_id": "D_PER", "second_driver_id": "D_BOT", "car_id": "C_CAD"}
 ]
 
 SEED_DRIVERS = [
@@ -19,7 +19,7 @@ SEED_DRIVERS = [
     {"id": "D_RUS", "team_id": "T_MER", "name": "Russell", "pace": 94, "consistency": 83, "attack_defense": 94, "tire_management": 93, "potential": 92},
 
     {"id": "D_LEC", "team_id": "T_FER", "name": "Leclerc", "pace": 93, "consistency": 83, "attack_defense": 92, "tire_management": 91, "potential": 95},
-    {"id": "D_HAM", "team_id": "T_FER", "name": "Hamilton", "pace": 89, "consistency": 98, "attack_defense": 93, "tire_management": 91, "potential": 82},
+    {"id": "D_HAM", "team_id": "T_FER", "name": "Hamilton", "pace": 89, "consistency": 98, "attack_defense": 93, "tire_management": 91, "potential": 90},
 
     {"id": "D_NOR", "team_id": "T_MCL", "name": "Norris", "pace": 97, "consistency": 83, "attack_defense": 93, "tire_management": 82, "potential": 95},
     {"id": "D_PIA", "team_id": "T_MCL", "name": "Piastri", "pace": 92, "consistency": 77, "attack_defense": 95, "tire_management": 81, "potential": 97},
@@ -27,8 +27,8 @@ SEED_DRIVERS = [
     {"id": "D_VER", "team_id": "T_RBR", "name": "Verstappen", "pace": 97, "consistency": 88, "attack_defense": 96, "tire_management": 82, "potential": 94},
     {"id": "D_HAD", "team_id": "T_RBR", "name": "Hadjar", "pace": 85, "consistency": 71, "attack_defense": 81, "tire_management": 82, "potential": 86},
 
-    {"id": "D_ALO", "team_id": "T_AST", "name": "Alonso", "pace": 91, "consistency": 99, "attack_defense": 87, "tire_management": 85, "potential": 75},
-    {"id": "D_STR", "team_id": "T_AST", "name": "Stroll", "pace": 77, "consistency": 84, "attack_defense": 77, "tire_management": 73, "potential": 78},
+    {"id": "D_ALO", "team_id": "T_AST", "name": "Alonso", "pace": 91, "consistency": 99, "attack_defense": 87, "tire_management": 85, "potential": 85},
+    {"id": "D_STR", "team_id": "T_AST", "name": "Stroll", "pace": 77, "consistency": 84, "attack_defense": 77, "tire_management": 73, "potential": 83},
 
     {"id": "D_GAS", "team_id": "T_ALP", "name": "Gasly", "pace": 85, "consistency": 83, "attack_defense": 83, "tire_management": 78, "potential": 86},
     {"id": "D_COL", "team_id": "T_ALP", "name": "Colapinto", "pace": 75, "consistency": 69, "attack_defense": 71, "tire_management": 74, "potential": 87},
@@ -96,8 +96,12 @@ SEED_TRACKS = [
      "req_grip": 0.40, "req_driver_skill": 0.25, "weather_volatility": 0.15, "num_laps": 63, "base_lap_time": 78.0, "pit_loss": 28.0},
 
     # 8. Monaco: ~1m14s, ~22s pit loss
+    # tyre_severity açık verildi: formül (req_grip bazlı) Monako'yu en çok lastik
+    # yiyen pist yapıyordu; gerçekte yavaş sokak pisti = yılın EN AZ aşındıran
+    # yarışı, tipik 1-stop (gerçek 2026 Monako GP çoğunluk 1-2 pit).
     {"id": "TRK_08", "name": "Monaco", "req_top_speed": 0.05, "req_acceleration": 0.35, "req_grip": 0.60,
-     "req_driver_skill": 0.40, "weather_volatility": 0.10, "num_laps": 78, "base_lap_time": 74.0, "pit_loss": 22.0},
+     "req_driver_skill": 0.40, "weather_volatility": 0.10, "num_laps": 78, "base_lap_time": 74.0, "pit_loss": 22.0,
+     "tyre_severity": 0.72},
      
     # 9. Kanada (Montreal): ~1m15s, ~18s pit loss (çok kısa pit)
     {"id": "TRK_09", "name": "Canada (Montreal)", "req_top_speed": 0.35, "req_acceleration": 0.45, "req_grip": 0.20,
@@ -139,8 +143,10 @@ SEED_TRACKS = [
      "req_driver_skill": 0.30, "weather_volatility": 0.05, "num_laps": 51, "base_lap_time": 105.0, "pit_loss": 21.0},
      
     # 18. Singapur: ~1m36s, ~28s pit loss (uzun pit yolu, yavaş yarış)
+    # tyre_severity: sokak pisti — grip talebine rağmen aşınma orta düzey (gerçekte 1-stop ağırlıklı)
     {"id": "TRK_18", "name": "Singapore", "req_top_speed": 0.15, "req_acceleration": 0.40, "req_grip": 0.45,
-     "req_driver_skill": 0.35, "weather_volatility": 0.20, "num_laps": 62, "base_lap_time": 96.0, "pit_loss": 28.0},
+     "req_driver_skill": 0.35, "weather_volatility": 0.20, "num_laps": 62, "base_lap_time": 96.0, "pit_loss": 28.0,
+     "tyre_severity": 0.92},
 
     # 19. ABD (Austin): ~1m38s, ~20s pit loss
     {"id": "TRK_19", "name": "USA (Austin)", "req_top_speed": 0.30, "req_acceleration": 0.30, "req_grip": 0.40,

@@ -56,7 +56,7 @@ def format_time(total_seconds: float) -> str:
     else:
         return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
 
-def run_season(seed=44 , filename="f1_season_races_report.xlsx"):
+def run_season(seed=79 , filename="f1_season_races_report.xlsx"):
     random.seed(seed)
     
     # Baslangic statlarini kaydet
@@ -191,7 +191,7 @@ def run_season(seed=44 , filename="f1_season_races_report.xlsx"):
         # Yarış içi yağmur tahmini ve strateji belirleme
         num_laps = track.num_laps or settings.DEFAULT_RACE_LAPS
         forecast = engine.make_forecast(track, num_laps)
-        strategies = plan_strategies(grid, forecast, num_laps, settings)
+        strategies = plan_strategies(grid, forecast, num_laps, settings, track=track)
         
         apply_qualifying_tire_rule(strategies, q3_tire_choices, forecast)
 

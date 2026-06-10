@@ -73,7 +73,7 @@ def run(seed=2026):
                     for d, dr in drivers.items()}
         num_laps = track.num_laps or s.DEFAULT_RACE_LAPS
         fc = engine.make_forecast(track, num_laps)
-        strat = plan_strategies(grid, fc, num_laps, s)
+        strat = plan_strategies(grid, fc, num_laps, s, track=track)
         apply_qualifying_tire_rule(strat, q3, fc)
         res = engine.simulate_race(grid, profiles, track, form=form, strategies=strat, forecast=fc)
 

@@ -20,3 +20,9 @@ class Track(BaseModel):
     overtaking_difficulty: Optional[float] = Field(
         default=None, ge=0, le=1, description="0=kolay sollama (Monza), 1=imkansız (Monako)"
     )
+    tyre_severity: Optional[float] = Field(
+        default=None, gt=0,
+        description="Lastik aşınma şiddeti (verilmezse req_grip'ten türetilir). "
+                    "Yavaş sokak pistleri (Monako) grip istese de lastiği AZ yer — "
+                    "formül bunu bilemediği için açık değer verilebilir."
+    )

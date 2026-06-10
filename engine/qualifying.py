@@ -1,18 +1,27 @@
 import random
 from typing import List, Dict, Any
 
+from engine.race_director import RaceDirector
+
 class Qualifying:
     def __init__(self, settings):
         self.settings = settings
 
-    def _calculate_lap_time(self, driver, car, track, is_raining, form_val, track_evolution):
+    def _calculate_lap_time(self, driver, car, track, is_raining, form_val, track_evolution,
+                            aero_level=3):
         """Sürücünün o anki şartlardaki tek tur zamanını hesaplar."""
         s = self.settings
-        
+
         # 1. Temel Performans (Base Power)
         car_perf = (car.top_speed * track.req_top_speed) + \
                    (car.acceleration * track.req_acceleration) + \
                    (car.grip * track.req_grip)
+
+        # Aero ayarı SIRALAMADAN ÖNCE seçilir ve quali turunu da etkiler
+        # (yarış motorundaki parabolik mismatch cezasının aynısı).
+        aero_mismatch = (aero_level - RaceDirector.ideal_aero(track, s)) ** 2
+        car_perf *= (1 - min(s.AERO_MISMATCH_MAX, s.AERO_MISMATCH_COEFF * aero_mismatch))
+
         driver_perf = driver.get_effective_stat("pace")
         
         base_power = (car_perf * (1 - track.req_driver_skill)) + (driver_perf * track.req_driver_skill)
@@ -44,12 +53,16 @@ class Qualifying:
         
         return round(lap_time, 3)
 
-    def simulate_qualifying(self, drivers, cars, teams, track, season_is_raining, form=None):
+    def simulate_qualifying(self, drivers, cars, teams, track, season_is_raining, form=None,
+                            aero_levels=None):
         """
         Q1, Q2, Q3 formatında sıralama turlarını simüle eder.
+        aero_levels: {driver_id: 1-5} — yarış öncesi seçilen aero ayarı quali'yi de
+        etkiler (verilmezse herkes 3 kabul edilir). Sürüş stili quali'yi ETKİLEMEZ.
         Döner: (grid_order, q3_tire_choices)
         """
         form = form or {}
+        aero_levels = aero_levels or {}
         all_drivers = list(drivers.values())
         
         # Sonuçları tutmak için
@@ -60,8 +73,8 @@ class Qualifying:
         q1_times = []
         for d in all_drivers:
             # Seans sonuna doğru tur atma şansı (Evolution yüksek)
-            evolution = random.uniform(0.7, 1.0) 
-            time = self._calculate_lap_time(d, cars[teams[d.team_id].car_id], track, season_is_raining, form.get(d.id, 0.0), evolution)
+            evolution = random.uniform(0.7, 1.0)
+            time = self._calculate_lap_time(d, cars[teams[d.team_id].car_id], track, season_is_raining, form.get(d.id, 0.0), evolution, aero_levels.get(d.id, 3))
             q1_times.append((d.id, time))
             results[d.id]["q1"] = time
             
@@ -73,7 +86,7 @@ class Qualifying:
         for d_id in top_16:
             d = drivers[d_id]
             evolution = random.uniform(0.8, 1.0)
-            time = self._calculate_lap_time(d, cars[teams[d.team_id].car_id], track, season_is_raining, form.get(d.id, 0.0), evolution)
+            time = self._calculate_lap_time(d, cars[teams[d.team_id].car_id], track, season_is_raining, form.get(d.id, 0.0), evolution, aero_levels.get(d_id, 3))
             q2_times.append((d_id, time))
             results[d_id]["q2"] = time
             
@@ -86,7 +99,7 @@ class Qualifying:
         for d_id in top_10:
             d = drivers[d_id]
             evolution = random.uniform(0.9, 1.0) # Q3'te pist en hızlı halindedir
-            time = self._calculate_lap_time(d, cars[teams[d.team_id].car_id], track, season_is_raining, form.get(d.id, 0.0), evolution)
+            time = self._calculate_lap_time(d, cars[teams[d.team_id].car_id], track, season_is_raining, form.get(d.id, 0.0), evolution, aero_levels.get(d_id, 3))
             q3_times.append((d_id, time))
             results[d_id]["q3"] = time
             

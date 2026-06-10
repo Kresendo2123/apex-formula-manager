@@ -58,6 +58,12 @@ class GameSettings:
     AERO_IDEAL_SPREAD = 8.0        # Grip payının (req_grip oranı) ideal kademeye esnetilmesi
     AERO_MISMATCH_COEFF = 0.008    # Kademe farkının KARESİ başına araç perf. cezası (oran)
     AERO_MISMATCH_MAX = 0.045      # Toplam ceza tavanı (çok kötü seçim cezalı ama felaket değil)
+    # Aero SIRALAMADAN ÖNCE seçilir: aynı mismatch cezası quali turuna da uygulanır
+    # (engine/qualifying.py) — doğru setup hem grid hem yarış kazandırır.
+    # Aero'nun lastik etkisi (küçük, gerçekçi): az kanat = viraj kayması = ısınma/aşınma.
+    AERO_WEAR_PER_LEVEL = 0.015        # Kademe 3'ün altındaki her seviye +%1.5 aşınma (üstü -%1.5)
+    AERO_WEAR_MISMATCH_COEFF = 0.010   # İdealden sapmanın karesi başına ek aşınma
+    AERO_WEAR_MISMATCH_MAX = 0.08      # Mismatch aşınma katkısı tavanı
 
     # ==============================================================================
     # SÜRÜŞ STRATEJİSİ (STINT MODU) ÇARPANLARI
@@ -69,10 +75,13 @@ class GameSettings:
     # wear takası daraltıldı. Hedef: üç stil de duruma göre oynanabilir, hiçbiri
     # ±40 puan/sezon bandının dışında baskın değil (test/setup_style_choice_test.py).
     # ==============================================================================
+    # attack: saldırı/savunma statına çarpan — agresif stil öndekini zorlar,
+    # sollama şansı ve pozisyon savunması artar (kumar profili: tempo + attack
+    # karşılığında hızlı tükenen lastik + kaza riski; SC/yağmur çıkarsa kâr eder).
     STRATEGY_STINT_MODIFIER = {
-        "aggressive": {"pace": 1.08, "tire_wear": 1.12, "crash_risk": 1.30},
-        "normal":     {"pace": 1.00, "tire_wear": 1.00, "crash_risk": 1.00},
-        "long_stint": {"pace": 0.96, "tire_wear": 0.94, "crash_risk": 0.90},
+        "aggressive": {"pace": 1.08, "tire_wear": 1.18, "crash_risk": 1.35, "attack": 1.08},
+        "normal":     {"pace": 1.00, "tire_wear": 1.00, "crash_risk": 1.00, "attack": 1.00},
+        "long_stint": {"pace": 0.96, "tire_wear": 0.94, "crash_risk": 0.90, "attack": 0.97},
     }
 
     # ==============================================================================
@@ -134,6 +143,8 @@ class GameSettings:
     SLOW_PIT_PROB = 0.07          # "Yavaş pit" (sıkışan bijon vb.) olasılığı
     SLOW_PIT_EXTRA_MIN = 1.5      # Yavaş pit ek kaybı alt sınırı (sn)
     SLOW_PIT_EXTRA_MAX = 5.0      # Yavaş pit ek kaybı üst sınırı (sn)
+    LATE_PIT_SKIP_WINDOW = 8      # Son N turda planlı kuru pit, lastik dayanacaksa atlanır
+                                  # (iki-bileşim kuralı sağlanmış olmalı — dinamik fırsat)
 
     # ==============================================================================
     # SOLLAMA DETAYI (DRS / SLIPSTREAM / KİRLİ HAVA / MÜCADELE)

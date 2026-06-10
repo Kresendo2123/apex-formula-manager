@@ -56,7 +56,7 @@ def run(n_seasons=40):
                         for d, dr in drivers.items()}
             num_laps = track.num_laps or s.DEFAULT_RACE_LAPS
             fc = engine.make_forecast(track, num_laps)
-            strat = plan_strategies(grid, fc, num_laps, s)
+            strat = plan_strategies(grid, fc, num_laps, s, track=track)
             apply_qualifying_tire_rule(strat, q3, fc)
             res = engine.simulate_race(grid, profiles, track, form=form, strategies=strat, forecast=fc)
             champ.process_race_result(res["classification"])
@@ -86,7 +86,10 @@ def run(n_seasons=40):
                 red_races += 1
             if res["rained"]:
                 rain_races += 1
-            ot = sum(1 for t in ev_types if t == "OVERTAKE")
+            # Motor artık TÜM pozisyonlardaki geçişleri logluyor (UI için);
+            # gerçek F1 referansı ilk-10 bazlı olduğundan filtre burada uygulanır.
+            ot = sum(1 for e in res["events"]
+                     if e["type"] == "OVERTAKE" and e.get("pos", 99) <= 10)
             overtakes_total += ot
             overtakes_by_track[track.name].append(ot)
             pits_total += sum(c["pits"] for c in cls)

@@ -1,17 +1,19 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import ClassVar, Optional
 
 
 class Car(BaseModel):
     id: str
     team_id: Optional[str] = None  # Many2One -> Team
 
-    # Araç Statları (0-100 arası validasyon)
-    acceleration: float = Field(..., ge=0, le=100)
-    top_speed: float = Field(..., ge=0, le=100)
-    grip: float = Field(..., ge=0, le=100)
-    reliability: float = Field(..., ge=0, le=100)
-    tire_consumption: float = Field(..., ge=0, le=100)
+    # Araç Statları (0-130 arası: 100 üstü "efsane bölge" — OSM tarzı sezon içi büyüme)
+    acceleration: float = Field(..., ge=0, le=130)
+    top_speed: float = Field(..., ge=0, le=130)
+    grip: float = Field(..., ge=0, le=130)
+    reliability: float = Field(..., ge=0, le=130)
+    tire_consumption: float = Field(..., ge=0, le=130)
+
+    STAT_CAP: ClassVar[int] = 130
 
     # Her bir stat için XP/Gelişim takibi
     acceleration_xp: int = 0
@@ -30,14 +32,10 @@ class Car(BaseModel):
         (Örn: 70 olan bir stat için daha az, 90 olan bir stat için çok daha fazla XP gerekir.)
         """
         stat_value = getattr(self, stat_name)
-        # Formül: 500 baz XP + (Stat^4) / 700.0
-        # Araçların üst seviyelere gelmesini çok daha maliyetli yapmak için 4. kuvveti (kuartik) aldık.
-        # Örneğin:
-        # stat 70 -> 500 + (24,010,000 / 700) = ~34,800 XP
-        # stat 80 -> 500 + (40,960,000 / 700) = ~59,014 XP
-        # stat 90 -> 500 + (65,610,000 / 700) = ~94,228 XP
-        # stat 99 -> 500 + (96,059,601 / 700) = ~137,728 XP
-        return int(500 + (stat_value ** 4) / 700.0)
+        # Beşinci kuvvet eğrisi (stat^5/55000): düşük seviyeler hızlı gelişir,
+        # 100+ "efsane bölge"ye doğru maliyet sert duvara dönüşür.
+        # Örneğin: stat 72 -> ~35k | 80 -> ~60k | 100 -> ~182k | 120 -> ~452k | 130 -> ~675k
+        return int(500 + (stat_value ** 5) / 55000.0)
 
     def add_xp_to_stat(self, stat_name: str, xp_amount: int):
         """
@@ -47,7 +45,7 @@ class Car(BaseModel):
             raise ValueError(f"Geçersiz veya geliştirilemez stat: {stat_name}")
 
         current_stat = getattr(self, stat_name)
-        if current_stat >= 100:
+        if current_stat >= self.STAT_CAP:
             return  # Stat maksimuma ulaşmışsa işlem yapma
 
         current_xp = getattr(self, f"{stat_name}_xp")
@@ -56,7 +54,7 @@ class Car(BaseModel):
         required_xp = self.get_required_xp_for_stat(stat_name)
 
         # XP barı dolduğu sürece seviye atlat
-        while current_xp >= required_xp and current_stat < 100:
+        while current_xp >= required_xp and current_stat < self.STAT_CAP:
             current_xp -= required_xp
             current_stat += 1
             setattr(self, stat_name, current_stat)

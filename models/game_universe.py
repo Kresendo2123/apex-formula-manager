@@ -258,7 +258,7 @@ class GameUniverse:
         
         # Stratejileri planla
         # Q3'e kalanların (self.driver_qualy_tire_choices içinde olanların) başlangıç lastiklerini zorla
-        strategies = plan_strategies(grid, forecast, num_laps, self.settings)
+        strategies = plan_strategies(grid, forecast, num_laps, self.settings, track=track)
         
         apply_qualifying_tire_rule(strategies, self.driver_qualy_tire_choices, forecast)
 

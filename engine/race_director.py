@@ -51,15 +51,28 @@ class RaceDirector:
         aero_penalty = min(self.settings.AERO_MISMATCH_MAX,
                            self.settings.AERO_MISMATCH_COEFF * aero_mismatch)
         car_performance *= (1 - aero_penalty)
+        # Agresif stil saldırı/savunmada da avantaj verir (öndekini zorlama),
+        # long_stint hafifçe pasifleştirir.
+        eff_attack *= strat_mods.get("attack", 1.0)
+
         # Stil pace çarpanı TÜM sürücü performansına uygulanır (eskiden yalnız
         # eff_pace'e uygulanıyordu; etki o kadar küçük kalıyordu ki stil seçiminde
         # pace tarafı hiç hissedilmiyor, takas tek yönlü "aşınma kazanır"a dönüyordu).
         driver_performance = ((eff_pace * 0.5) + (eff_consistency * 0.3) + (
                     eff_attack * 0.2)) * strat_mods["pace"]
 
-        tire_wear = car.tire_consumption * strat_mods["tire_wear"] * (1 - (eff_tire_mgmt * 0.005))
+        # Aero'nun lastik etkisi (gerçekçi, küçük): az kanat = az tutuş = viraj
+        # kayması -> lastiği ısıtıp yer; yüksek kanat aracı oturtur. İdealden
+        # sapma da (hangi yöne olursa olsun) kaymayı artırır.
+        aero_wear_mult = (1
+                          + self.settings.AERO_WEAR_PER_LEVEL * (3 - aero_level)
+                          + min(self.settings.AERO_WEAR_MISMATCH_MAX,
+                                self.settings.AERO_WEAR_MISMATCH_COEFF * aero_mismatch))
+
+        tire_wear = car.tire_consumption * strat_mods["tire_wear"] * aero_wear_mult * (1 - (eff_tire_mgmt * 0.005))
         tyre_wear_coeff_val = (
             strat_mods["tire_wear"]
+            * aero_wear_mult
             * (1.9 - car.tire_consumption / 100.0)
             * (1 - eff_tire_mgmt * 0.003)
         )

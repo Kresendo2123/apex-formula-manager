@@ -79,25 +79,32 @@ def run_season(s, drivers, cars, teams, tracks, subject, aero_mode, style, seaso
     aero_picks = []
 
     for no, track in enumerate(tracks, 1):
-        # Reseed: grid/hava/form tüm politikalarda birebir aynı olsun
+        # Reseed: hava/form tüm politikalarda birebir aynı olsun
+        # (grid artık aero seçiminden etkilenir — bu kasıtlı: aero quali'den önce seçilir)
         random.seed(season_seed * 1000 + no)
         form = {d: random.gauss(0, s.RACE_FORM_SIGMA) for d in drivers}
         is_q_rain = random.random() < track.weather_volatility
-        grid, q3 = quali.simulate_qualifying(drivers, cars, teams, track, is_q_rain, form=form)
+
+        aero_lv = {}
+        for d, dr in drivers.items():
+            if dr.team_id == subject:
+                aero_lv[d] = pick_aero(s, track, aero_mode)
+                aero_picks.append(aero_lv[d])
+            else:
+                aero_lv[d] = 3
+
+        grid, q3 = quali.simulate_qualifying(drivers, cars, teams, track, is_q_rain,
+                                             form=form, aero_levels=aero_lv)
 
         profiles = {}
         for d, dr in drivers.items():
             car = cars[teams[dr.team_id].car_id]
-            if dr.team_id == subject:
-                aero = pick_aero(s, track, aero_mode)
-                profiles[d] = director.build_profile(dr, car, track, aero, style, False)
-                aero_picks.append(aero)
-            else:
-                profiles[d] = director.build_profile(dr, car, track, 3, "normal", False)
+            sty = style if dr.team_id == subject else "normal"
+            profiles[d] = director.build_profile(dr, car, track, aero_lv[d], sty, False)
 
         num_laps = track.num_laps or s.DEFAULT_RACE_LAPS
         fc = engine.make_forecast(track, num_laps)
-        strat = plan_strategies(grid, fc, num_laps, s)
+        strat = plan_strategies(grid, fc, num_laps, s, track=track)
         apply_qualifying_tire_rule(strat, q3, fc)
         res = engine.simulate_race(grid, profiles, track, form=form, strategies=strat, forecast=fc)
         champ.process_race_result(res["classification"])
@@ -155,7 +162,7 @@ def run(n_seasons=5):
         dist[lvl] = dist.get(lvl, 0) + 1
     print(f"\nBİLGİ: Pist başına İDEAL aero kademesi dağılımı: "
           + ", ".join(f"seviye {k}: {v} pist" for k, v in sorted(dist.items())))
-    print("BİLGİ: Sıralama turları aero/stil seçimini KULLANMIYOR (grid hep aynı kalıyor).\n")
+    print("BİLGİ: Aero seçimi SIRALAMAYI DA etkiler (quali öncesi seçilir); stil sadece yarışı etkiler.\n")
 
 
 if __name__ == "__main__":

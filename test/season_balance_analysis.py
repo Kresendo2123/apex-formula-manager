@@ -114,7 +114,8 @@ def extract_race_metrics(race_no, track, grid, result, engine, drivers, teams, s
         if prev["laps_completed"] == cur["laps_completed"]:
             point_gaps.append(cur["total_time"] - prev["total_time"])
 
-    overtakes = sum(1 for ev in events if ev["type"] == "OVERTAKE")
+    # Motor tüm pozisyon geçişlerini logluyor; ilk-10 filtresi burada uygulanır
+    overtakes = sum(1 for ev in events if ev["type"] == "OVERTAKE" and ev.get("pos", 99) <= 10)
     dnf = sum(1 for ev in events if ev["type"] == "DNF")
     sc = sum(1 for ev in events if ev["type"] == "SC")
     vsc = sum(1 for ev in events if ev["type"] == "VSC")

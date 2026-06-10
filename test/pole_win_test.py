@@ -124,7 +124,7 @@ def run(n_per_track=200):
             # Strateji (her iki senaryoda ortak; kuru tahmin)
             fc = full_engine.make_forecast(track, num_laps)
             fc["rain_prob"] = 0.0
-            strat = plan_strategies(grid, fc, num_laps, real_settings)
+            strat = plan_strategies(grid, fc, num_laps, real_settings, track=track)
             apply_qualifying_tire_rule(strat, q3, fc)
 
             # --- 2) KAOSSUZ YARIŞ ---
