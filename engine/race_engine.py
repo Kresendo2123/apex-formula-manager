@@ -1,3 +1,4 @@
+import math
 import random
 from typing import List, Dict, Any, Optional
 
@@ -241,27 +242,63 @@ class LapRaceEngine:
                 return st["compound_by_lap"][L], L - lap
         return None, None
 
-    def _caution_pit(self, st, lap, num_laps, wetness, log, track, discount, label) -> float:
-        """SC/VSC altında ucuz pit penceresi (gerçek F1 strateji temel taşı).
-        Yalnız 'zaten durması yakın' araç girer: hava lastiği yanlışsa (zorunlu),
-        lastik aşınmışsa veya planlı stop yakındaysa. Taze lastikli araç ucuz diye
-        girmez; yeni pitlenmiş araç tekrar girmez."""
+    def _caution_pit(self, st, lap, num_laps, wetness, log, track, discount, label,
+                     severity=1.0) -> float:
+        """SC/VSC altında ucuz pit kararı.
+        PITWALL açıkken: gerçek EV hesabı — 'mevcut programla devam' ile 'şimdi
+        indirimli pit + yeniden planlanmış kalan yarış' kıyaslanır; risk profili
+        eşiği + karar zarı uygulanır. Kapalıyken eski guard mantığı (A/B testi)."""
         s = self.settings
         desired = self._desired_compound(
-            st["compound_by_lap"][lap], wetness, st["wet_bias"], st["current_compound"])
+            st["compound_by_lap"].get(lap, st["current_compound"]),
+            wetness, st["wet_bias"], st["current_compound"])
         weather_switch = self._compound_category(desired) != self._compound_category(st["current_compound"])
         recently = lap - st["last_pit_lap"] < s.SC_PIT_MIN_GAP_LAPS
-        worn = st["wear_pct"] >= s.SC_PIT_WEAR_MIN
-        next_comp, laps_to_switch = self._next_plan_switch(st, lap, num_laps)
-        upcoming = laps_to_switch is not None and laps_to_switch <= s.SC_PIT_LOOKAHEAD
-        if not (weather_switch or ((worn or upcoming) and not recently)):
-            return 0.0
+
+        new_comp, ev_note, pitnow_plan = None, "", None
         if weather_switch:
-            new_comp = desired
-        elif upcoming:
-            new_comp = next_comp           # planlı stop öne çekilir
+            new_comp = desired                       # yanlış kategorideki lastik: zorunlu
+        elif not s.PITWALL_ENABLED:
+            # --- ESKİ GUARD MANTIĞI (PITWALL kapalıyken, kıyas için korunur) ---
+            worn = st["wear_pct"] >= s.SC_PIT_WEAR_MIN
+            next_comp, laps_to_switch = self._next_plan_switch(st, lap, num_laps)
+            upcoming = laps_to_switch is not None and laps_to_switch <= s.SC_PIT_LOOKAHEAD
+            if not ((worn or upcoming) and not recently):
+                return 0.0
+            new_comp = (next_comp if upcoming else (next_comp or st["current_compound"]))
         else:
-            new_comp = next_comp or st["current_compound"]  # son stintte taze set
+            # --- PİT DUVARI EV KARARI ---
+            if recently or st["wear_pct"] < 0.12 or num_laps - lap < 3:
+                return 0.0
+            stay_runs = self._schedule_runs(st, lap, num_laps)
+            stay_cost = self._tail_cost(stay_runs, st["wear_pct"],
+                                        st["tyre_wear_coeff"], severity, track)
+            pitnow_plan = self._plan_tail(st, lap, num_laps, severity, track,
+                                          switch_now=True, first_pit_discount=discount)
+            if pitnow_plan is None:
+                return 0.0
+            gain = stay_cost - pitnow_plan["cost"]
+            # Pozisyon maliyeti: pit altında kuyruğa düşmek, sollaması zor pistte
+            # süre-EV'nin görmediği bir bedel (geri geçemezsin). Zorlukla ölçekli.
+            gain -= s.PITWALL_SC_POS_COST * self._track_overtaking_difficulty(track)
+            profile = s.PITWALL_RISK.get(st.get("risk", "orta"), s.PITWALL_RISK["orta"])
+            decide = gain > profile["sc_gain"]
+            # Karar zarı YALNIZ marjinal kararlarda atılır (eşiğe yakın iki makul
+            # aksiyon arasında) — bariz kararı kimse ters çevirmez ("lastik ölüyor,
+            # pit şart" gibi). Adalet ilkesi: kötü zar = ikinci en iyi seçenek,
+            # asla saçma seçenek değil.
+            marginal = abs(gain - profile["sc_gain"]) <= 6.0
+            if marginal and random.random() < profile["err"]:
+                decide = not decide
+            if not decide:
+                if gain > 3.0:   # kaçırılan bariz fırsat da görünür olsun (şeffaflık)
+                    log(lap, "PITWALL",
+                        f"Pit duvarı ({label}): {st['driver_id']} fırsatı PAS GEÇTİ "
+                        f"(tahmini +{gain:.1f}s kazanç vardı)", driver=st["driver_id"])
+                return 0.0
+            new_comp = pitnow_plan["next"]
+            ev_note = f" (tahmini net {gain:+.1f}s)"
+
         base_loss = getattr(track, "pit_loss", None) or s.PIT_LANE_LOSS
         pit_loss = max(0.0, base_loss * discount + random.gauss(0, s.PIT_TIME_SIGMA))
         st["current_compound"] = new_comp
@@ -271,7 +308,11 @@ class LapRaceEngine:
         st["last_pit_lap"] = lap
         st["pending_switch_lap"] = None
         st["loss_pit"] += pit_loss
-        log(lap, "PIT", f"PIT ({label} altında, {new_comp}): {st['driver_id']} ucuz pit fırsatını kullandı",
+        # Pit sonrası kalan program: SC piti planı değiştirdi -> kuyruk yeniden yazılır
+        if pitnow_plan is not None:
+            self._rewrite_tail(st, lap, num_laps, pitnow_plan, switch_now=True)
+        log(lap, "PIT", f"PIT ({label} altında, {new_comp}): {st['driver_id']} "
+                        f"ucuz pit fırsatını kullandı{ev_note}",
             driver=st["driver_id"], compound=new_comp)
         return pit_loss
 
@@ -289,6 +330,234 @@ class LapRaceEngine:
             st["compounds_used"].add(new_comp)
             st["wear_pct"] = 0.0
         log(lap, "RED_TYRES", "🔴 Kırmızı bayrak: tüm araçlara bedava taze lastik takıldı")
+
+    # ---------------------------------------------------------------- pit duvarı
+    # Dinamik yarış içi strateji: yarış öncesi kart bir NİYETTİR; yağmur biter,
+    # SC çıkar, kural-2 yaklaşırken pit duvarı kalan yarışı yeniden planlar.
+    # Temel veri yapısı PENCERE: aday pit turlarının maliyet eğrisinin dibi +
+    # PIT_WINDOW_EPS içindeki aralık. Kumar = pencereyi bilinçli esnetmek
+    # (bedeli tur başına bilinen "kanama", PITWALL_MAX_BLEED ile tavanlı).
+
+    def _dry_used(self, st):
+        s = self.settings
+        return {c for c in st["compounds_used"] if s.TYRE_COMPOUNDS[c]["type"] == "dry"}
+
+    def _wet_used(self, st) -> bool:
+        s = self.settings
+        return any(s.TYRE_COMPOUNDS[c]["type"] == "wet" for c in st["compounds_used"])
+
+    def _stint_cost(self, comp_name: str, laps: int, w0: float, coeff: float,
+                    severity: float, base: float) -> float:
+        """Bir stintin göreli süre maliyeti (kapalı form — sweep için O(1)).
+        deg = tc*wear lineer bölge + cliff sonrası cc*(wear-cliff); bileşim
+        temposu -pace*base. w0 = stinte girerkenki aşınma."""
+        if laps <= 0:
+            return 0.0
+        s = self.settings
+        comp = s.TYRE_COMPOUNDS[comp_name]
+        r = comp["wear_rate"] * coeff * severity
+        tc = comp.get("wear_time_coeff", s.WEAR_TIME_COEFF)
+        cc = comp.get("cliff_coeff", s.WEAR_CLIFF_COEFF)
+        cliff = comp.get("cliff", s.WEAR_CLIFF)
+        L = laps
+        cost = -comp["pace"] * base * L
+        cost += tc * (L * w0 + r * L * (L + 1) / 2.0)
+        end_wear = w0 + r * L
+        if end_wear > cliff and r > 0:
+            k0 = max(0, math.ceil((cliff - w0) / r))   # cliff'e kadar tur
+            m = L - k0
+            if m > 0:
+                sum_k = (L * (L + 1) - k0 * (k0 + 1)) / 2.0
+                cost += cc * (m * (w0 - cliff) + r * sum_k)
+        return cost
+
+    def _tail_cost(self, runs, w0: float, coeff: float, severity: float,
+                   track, first_pit_discount: float = 1.0) -> float:
+        """runs: [(bileşim, tur)] — kalan yarışın göreli maliyeti. İlk run mevcut
+        lastikle w0'dan devam eder; sonraki her run pit kaybı + taze lastik."""
+        s = self.settings
+        base = getattr(track, "base_lap_time", None) or s.BASE_LAP_TIME
+        pit_loss = getattr(track, "pit_loss", None) or s.PIT_LANE_LOSS
+        total = 0.0
+        for i, (c, laps) in enumerate(runs):
+            if i > 0:
+                total += pit_loss * (first_pit_discount if i == 1 else 1.0)
+            total += self._stint_cost(c, laps, w0 if i == 0 else 0.0, coeff, severity, base)
+        return total
+
+    def _schedule_runs(self, st, lap: int, num_laps: int):
+        """Mevcut compound_by_lap programını [(bileşim, tur)] run listesine çevirir
+        (lap..num_laps aralığı; ilk run mevcut bileşimle devam varsayılır)."""
+        runs = []
+        cur, count = st["current_compound"], 0
+        for L in range(lap, num_laps + 1):
+            c = st["compound_by_lap"].get(L, cur)
+            if c == cur:
+                count += 1
+            else:
+                runs.append((cur, count))
+                cur, count = c, 1
+        runs.append((cur, count))
+        return runs
+
+    def _plan_tail(self, st, lap: int, num_laps: int, severity: float, track,
+                   switch_now: bool = False, first_pit_discount: float = 1.0):
+        """Kalan yarış (lap..num_laps) için en iyi programı arar.
+        switch_now=True: araç ŞİMDİ pit yapacak (SC fırsatı / kuruma) — ilk run
+        taze lastikle başlar ve ilk pit indirimi uygulanabilir.
+        Döner: {"runs", "cost", "pit_lap", "next", "window", "best_lap"} | None"""
+        s = self.settings
+        n = num_laps - lap + 1
+        if n <= 2:
+            return None
+        cur = st["current_compound"]
+        w0 = st["wear_pct"]
+        coeff = st["tyre_wear_coeff"]
+        cur_dry = s.TYRE_COMPOUNDS[cur]["type"] == "dry"
+        dry = [c for c, d in s.TYRE_COMPOUNDS.items() if d["type"] == "dry"]
+        used_dry = self._dry_used(st)
+        needs_second = (not self._wet_used(st)) and len(used_dry) <= 1
+
+        def cost_of(runs, disc=1.0):
+            return self._tail_cost(runs, 0.0 if switch_now else w0, coeff, severity,
+                                   track, first_pit_discount=disc)
+
+        best = None
+        sweep = {}   # (pit_lap, next_comp) -> cost  (pencere hesabı için)
+
+        if switch_now:
+            # Şimdi pitleniyor: hangi taze bileşim + sonrasında ek stop gerekir mi?
+            pit0 = getattr(track, "pit_loss", None) or s.PIT_LANE_LOSS
+            for c1 in dry:
+                if needs_second and len(used_dry) == 1 and c1 in used_dry and n > 8:
+                    pass  # aynı bileşimi takmak kuralı çözmez ama ek stopla çözülebilir
+                # tek stint sona kadar
+                runs = [(c1, n)]
+                rule_ok = (not needs_second) or (c1 not in used_dry) or self._wet_used(st)
+                c = pit0 * first_pit_discount + self._tail_cost(
+                    [(c1, n)], 0.0, coeff, severity, track)
+                if rule_ok and (best is None or c < best["cost"]):
+                    best = {"runs": runs, "cost": c, "pit_lap": lap, "next": c1,
+                            "window": None, "best_lap": lap}
+                # c1 + ikinci stop c2 (kural/cliff gerekirse)
+                for c2 in dry:
+                    if needs_second and c1 in used_dry and c2 == c1:
+                        continue
+                    for T in range(lap + 4, num_laps - 2, 2):
+                        runs2 = [(c1, T - lap), (c2, num_laps - T + 1)]
+                        c = pit0 * first_pit_discount + self._tail_cost(
+                            runs2, 0.0, coeff, severity, track)
+                        if best is None or c < best["cost"]:
+                            best = {"runs": runs2, "cost": c, "pit_lap": lap, "next": c1,
+                                    "window": None, "best_lap": lap}
+            return best
+
+        # Normal mod: mevcut lastikle devam + ileride 0/1/2 stop
+        if cur_dry and not needs_second:
+            runs = [(cur, n)]
+            c = cost_of(runs)
+            best = {"runs": runs, "cost": c, "pit_lap": None, "next": None,
+                    "window": None, "best_lap": None}
+
+        if cur_dry:
+            for c2 in dry:
+                if needs_second and len(used_dry) == 1 and c2 in used_dry:
+                    continue
+                for T in range(lap + 2, num_laps - 1):
+                    runs = [(cur, T - lap), (c2, num_laps - T + 1)]
+                    c = cost_of(runs)
+                    sweep[(T, c2)] = c
+                    if best is None or c < best["cost"]:
+                        best = {"runs": runs, "cost": c, "pit_lap": T, "next": c2,
+                                "window": None, "best_lap": T}
+            # 2-stop (yüksek aşınma/uzun yarış güvencesi): kaba ızgara
+            for c2 in dry:
+                for c3 in dry:
+                    if needs_second and len(used_dry) == 1 and \
+                            c2 in used_dry and c3 in used_dry:
+                        continue
+                    for T in range(lap + 4, num_laps - 8, 4):
+                        mid = (num_laps - T) // 2
+                        if mid < 4:
+                            continue
+                        runs = [(cur, T - lap), (c2, mid), (c3, num_laps - T - mid + 1)]
+                        c = cost_of(runs)
+                        if best is None or c < best["cost"]:
+                            best = {"runs": runs, "cost": c, "pit_lap": T, "next": c2,
+                                    "window": None, "best_lap": T}
+
+        if best is None:
+            return None
+        # PENCERE: en iyi planın bileşimi için dip + EPS içindeki pit turları
+        if best["pit_lap"] is not None and best["next"] is not None:
+            same = [(T, c) for (T, c2), c in sweep.items() if c2 == best["next"]]
+            if same:
+                in_win = [T for T, c in same if c <= best["cost"] + s.PIT_WINDOW_EPS]
+                if in_win:
+                    best["window"] = (min(in_win), max(in_win))
+        return best
+
+    def _rewrite_tail(self, st, lap: int, num_laps: int, plan, switch_now: bool = False):
+        """compound_by_lap'in kalan kısmını yeni programla değiştirir.
+        switch_now=False: bu tur mevcut bileşim korunur (pit, plandaki sınırda)."""
+        cbl = st["compound_by_lap"]
+        L = lap
+        for comp, laps in plan["runs"]:
+            for _ in range(max(0, laps)):
+                if L > num_laps:
+                    break
+                cbl[L] = comp
+                L += 1
+        last = plan["runs"][-1][0]
+        while L <= num_laps:
+            cbl[L] = last
+            L += 1
+
+    def _replan(self, st, lap: int, num_laps: int, severity: float, track,
+                log, reason: str):
+        """Pit duvarı yeniden planlaması: kalan yarışı optimize eder, pencereyi
+        hesaplar, risk profiline göre hedef pit turunu yerleştirir ve loglar."""
+        s = self.settings
+        if not s.PITWALL_ENABLED or not st["running"]:
+            return
+        # Araç ıslak lastikteyse (kuruma replanı) plan "şimdi kuruya geç" modunda
+        # kurulur: ilk run taze kuru bileşim, geçişi hava mantığı (lag'li) yapar.
+        on_wet = s.TYRE_COMPOUNDS[st["current_compound"]]["type"] == "wet"
+        plan = self._plan_tail(st, lap, num_laps, severity, track, switch_now=on_wet)
+        if plan is None:
+            return
+        profile = s.PITWALL_RISK.get(st.get("risk", "orta"), s.PITWALL_RISK["orta"])
+        # Risk yerleştirmesi: pencere dibinden sonra fırsat bekleme (stretch) —
+        # kanama tavanı aşılmadan; ayrıca küçük zar gürültüsü (±1 tur).
+        if plan["pit_lap"] is not None and plan["window"]:
+            lo, hi = plan["window"]
+            target = plan["best_lap"] + profile["stretch"]
+            if profile["err"] > 0 and random.random() < 0.5:
+                target += random.choice([-1, 1])
+            target = max(lo, min(target, hi + profile["stretch"], num_laps - 2))
+            if target != plan["pit_lap"]:
+                first = target - lap
+                rest = num_laps - target + 1
+                if first >= 1 and rest >= 2:
+                    plan["runs"] = [(st["current_compound"], first)] + \
+                                   [(c, l) for c, l in plan["runs"][1:]]
+                    # son run kalanı kapatsın
+                    used = first + sum(l for _, l in plan["runs"][1:-1])
+                    lc = plan["runs"][-1][0]
+                    plan["runs"][-1] = (lc, max(2, num_laps - lap + 1 - used))
+                    plan["pit_lap"] = target
+        self._rewrite_tail(st, lap, num_laps, plan)
+        if plan["pit_lap"] is not None:
+            win_txt = (f", pencere T{plan['window'][0]}-T{plan['window'][1]}"
+                       if plan["window"] else "")
+            log(lap, "PITWALL",
+                f"Pit duvarı ({reason}): {st['driver_id']} -> {plan['next']} "
+                f"@T{plan['pit_lap']}{win_txt}",
+                driver=st["driver_id"], pit_lap=plan["pit_lap"], compound=plan["next"])
+        else:
+            log(lap, "PITWALL",
+                f"Pit duvarı ({reason}): {st['driver_id']} sona kadar devam",
+                driver=st["driver_id"])
 
     def _overtake_success(self, attacker, defender, ot_difficulty, drs_on, extra_bonus=0.0) -> bool:
         s = self.settings
@@ -365,12 +634,14 @@ class LapRaceEngine:
         for grid_idx, d_id in enumerate(grid_order):
             p = profiles[d_id]
             strat = strategies.get(d_id)
+            risk = "orta"
             if isinstance(strat, list):
                 plan, wet_bias, reaction_lag = strat, 0.0, s.WEATHER_REACTION_LAG
             elif isinstance(strat, dict):
                 plan = strat["plan"]
                 wet_bias = strat.get("wet_bias", 0.0)
                 reaction_lag = strat.get("reaction_lag", s.WEATHER_REACTION_LAG)
+                risk = strat.get("risk", "orta")
             else:
                 plan = self._default_strategy(num_laps)
                 wet_bias, reaction_lag = 0.0, s.WEATHER_REACTION_LAG
@@ -388,6 +659,7 @@ class LapRaceEngine:
                 "compound_by_lap": compound_by_lap, "current_compound": compound_by_lap[1],
                 "compounds_used": {compound_by_lap[1]},  # iki-bileşim kuralı takibi
                 "wear_pct": 0.0, "pits": 0, "wet_bias": wet_bias, "reaction_lag": reaction_lag,
+                "risk": risk, "rule2_planned": False,   # pit duvarı durumu
                 "pending_switch_lap": None,
                 "pace_penalty": 1.0, "pending_repair": False, "incident_time_loss": 0.0, "repairs": 0,
                 "battle_time_loss": 0.0, "pit_loss_this_lap": 0.0,
@@ -424,6 +696,17 @@ class LapRaceEngine:
                         for st in track_order if st["perks"]]
         if perk_holders:
             log(0, "PERKS", "Sahadaki perkler: " + " | ".join(perk_holders))
+
+        # Pit duvarı: yarış başında tahmini ilk pit pencereleri (bilgi/yayın grafiği).
+        # Karta dokunmaz — sadece optimizörün gördüğü pencereyi loglar.
+        if s.PITWALL_ENABLED:
+            for st in track_order:
+                adv = self._plan_tail(st, 1, num_laps, tyre_severity, track)
+                if adv and adv.get("window"):
+                    lo, hi = adv["window"]
+                    log(0, "PITWALL",
+                        f"📍 Tahmini ilk pit penceresi: {st['driver_id']} T{lo}-T{hi}",
+                        driver=st["driver_id"], window=(lo, hi))
 
         # Kalkış (launch) varyansı: ışıklar söndüğünde refleks farkı sıralamayı
         # değiştirebilir. Consistency düşük pilot startı daha sık batırır;
@@ -462,6 +745,16 @@ class LapRaceEngine:
                     wetness=wetness, band=band)
                 prev_band = band
 
+            # Pit duvarı — KURUMA TETİĞİ: pist kuruyunca eski kuru plan bayattır
+            # (yağmur pitleri programı kaydırdı). Kalan yarış herkes için yeniden
+            # planlanır; aksi halde araçlar bayat plana itaat edip anlamsız geç
+            # stoplar atıyordu ("stratejiye bağlı kalacağım diye patlama").
+            if (s.PITWALL_ENABLED and lap > 1
+                    and weather[lap - 1] >= 0.12 > wetness):
+                for st in track_order:
+                    self._replan(st, lap, num_laps, tyre_severity, track,
+                                 log, "pist kuruyor")
+
             under_caution = sc_laps > 0 or vsc_laps > 0
             req_caution, req_who = None, None
 
@@ -494,6 +787,10 @@ class LapRaceEngine:
                     self._bunch_field(track_order, 0.0, 0.0)
                     self._red_flag_free_tyres(track_order, lap, wetness, log)
                     log(lap, "RED_FLAG", f"🔴 KIRMIZI BAYRAK ({req_who}) — yarış durdu, restart", driver=req_who)
+                    if s.PITWALL_ENABLED and wetness < 0.12:
+                        for st2 in track_order:   # bedava lastik programları değiştirdi
+                            self._replan(st2, lap, num_laps, tyre_severity, track,
+                                         log, "kırmızı bayrak")
                     sc_laps, caution_len = 1, 1
                 elif req_caution == "SC":
                     self._bunch_field(track_order, s.SC_INLAP_PENALTY, s.SC_GAP)
@@ -514,7 +811,7 @@ class LapRaceEngine:
                 sc_time = track_base_time * s.SC_SPEED_MULT
                 for st in track_order:
                     pit_loss = self._caution_pit(st, lap, num_laps, wetness, log, track,
-                                                 s.SC_PIT_DISCOUNT, "SC")
+                                                 s.SC_PIT_DISCOUNT, "SC", tyre_severity)
                     st["cumulative_time"] += sc_time + pit_loss
                     st["wear_pct"] += s.TYRE_COMPOUNDS[st["current_compound"]]["wear_rate"] * st["tyre_wear_coeff"] * tyre_severity * 0.2
                     st["laps_completed"] = lap
@@ -525,13 +822,28 @@ class LapRaceEngine:
                 vsc_time = track_base_time * s.VSC_SLOWDOWN
                 for st in track_order:
                     pit_loss = self._caution_pit(st, lap, num_laps, wetness, log, track,
-                                                 s.VSC_PIT_DISCOUNT, "VSC")
+                                                 s.VSC_PIT_DISCOUNT, "VSC", tyre_severity)
                     st["cumulative_time"] += vsc_time + pit_loss
                     st["laps_completed"] = lap
             else:
                 for i, st in enumerate(track_order):
                     if st["dirty_air_cooldown"] > 0:
                         st["dirty_air_cooldown"] -= 1
+
+                    # Pit duvarı — KURAL-2 CHECKPOINT (yarışın %60'ı): hâlâ tek tip
+                    # slick'teyse ikinci bileşimi EN İYİ pencereye şimdiden planla
+                    # (son turlarda zorla pit yememek için; N-6 force yedek kalır).
+                    if (s.PITWALL_ENABLED and not st["rule2_planned"]
+                            and lap == int(num_laps * 0.6) and wetness < 0.15):
+                        st["rule2_planned"] = True
+                        used_dry = self._dry_used(st)
+                        if not self._wet_used(st) and len(used_dry) <= 1:
+                            tail_has_other = any(
+                                st["compound_by_lap"].get(L) not in used_dry
+                                for L in range(lap, num_laps + 1))
+                            if not tail_has_other:
+                                self._replan(st, lap, num_laps, tyre_severity, track,
+                                             log, "iki bileşim kuralı planı")
 
                     desired = self._desired_compound(
                         st["compound_by_lap"][lap], wetness, st["wet_bias"], st["current_compound"])
@@ -568,7 +880,15 @@ class LapRaceEngine:
                                 f"İki bileşim kuralı: {st['driver_id']} farklı slick takmak ZORUNDA",
                                 driver=st["driver_id"])
 
+                    prev_cat = self._compound_category(st["current_compound"])
                     pit_loss = self._handle_pit(st, desired, lap, log, track)
+                    # Pit duvarı — HAVA PİTİ TETİĞİ: kategori değişti (slick<->yağmur
+                    # lastiği) = plan dışı pit; kalan program yeniden kurulur.
+                    if (s.PITWALL_ENABLED and pit_loss > 0
+                            and self._compound_category(st["current_compound"]) != prev_cat
+                            and self._compound_category(st["current_compound"]) == "dry"):
+                        self._replan(st, lap, num_laps, tyre_severity, track,
+                                     log, "kuruya dönüş")
                     repair_loss = s.REPAIR_TIME if st["pending_repair"] else 0.0
                     st["pending_repair"] = False
                     inc_loss = st["incident_time_loss"]
@@ -750,6 +1070,10 @@ class LapRaceEngine:
                             self._bunch_field(track_order, 0.0, 0.0)
                             self._red_flag_free_tyres(track_order, lap, wetness, log)
                             log(lap, "RED_FLAG", f"🔴 KIRMIZI BAYRAK ({col_who} teması) — restart", driver=col_who)
+                            if s.PITWALL_ENABLED and wetness < 0.12:
+                                for st2 in track_order:
+                                    self._replan(st2, lap, num_laps, tyre_severity,
+                                                 track, log, "kırmızı bayrak")
                             sc_laps, caution_len = 1, 1
 
                 if track_order and track_order[0]["driver_id"] != prev_leader:

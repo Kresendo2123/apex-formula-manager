@@ -232,11 +232,15 @@ def plan_strategies(grid_ids: List[str], forecast: Dict[str, Any], num_laps: int
             plan = track_plans.get(kind)
         if plan is None:
             plan = _make_dry_plan(kind, num_laps)
+        # Pit duvarı risk profili: offset (SC piyangosu kovalar) ve yağmur
+        # kumarcıları yüksek risk; konvansiyonel planlar orta.
+        risk = "yüksek" if (kind == "offset" or "kumar" in tag) else "orta"
         strategies[d_id] = {
             "plan": [dict(s) for s in plan],
             "wet_bias": wet_bias,
             "reaction_lag": reaction_lag,
             "tag": tag,
+            "risk": risk,
         }
     return strategies
 
@@ -351,4 +355,7 @@ def apply_choice(strategies: Dict[str, Any], d_id: str, option: Dict[str, Any]) 
         "wet_bias": option["wet_bias"],
         "reaction_lag": option["reaction_lag"],
         "tag": option["id"],
+        # Kartın risk etiketi pit duvarının yarış içi karakterini belirler
+        # (SC fırsat eşiği, pencere esnetme, karar zarı) — oyuncu ajansı buradan.
+        "risk": option.get("risk", "orta"),
     }

@@ -46,15 +46,21 @@ STYLES = [("normal", "Normal", "dengeli — her duruma uyar"),
           ("aggressive", "Agresif", "tempo + atak avantajı; lastik hızlı biter, kaza riski (kumar)"),
           ("long_stint", "Lastik Koruma", "temiz havada altın değerinde; trafikte yavaşlık cezası")]
 
-# OSM tarzı sezon içi büyüme (kullanıcı kararı): sezon başında 70 olan bir stat
-# sezon sonunda 100+ olabilmeli. Sürücü 25x, araç 20x (stat tavanı 130'a çıktı;
-# potansiyel üstü yumuşak ceza: her puan için +%3 zorlaşma — models/driver.py).
-# Sürücü XP araçtan hızlı: araç 2 pilota yarar, sürücü teke — denge için.
-DRIVER_XP_PER_PRESS = 75000   # eski 3000 x25
-CAR_XP_PER_PRESS = 230000     # eski 11500 x20
+# Pit duvarı talimatı: yarış içi dinamik kararların (SC fırsat piti, pencere
+# esnetme) risk iştahı. None = kartın kendi risk etiketi kullanılır.
+WALL_OPTIONS = ["Karttan (önerilen)", "Güvenli — sadece bariz fırsat",
+                "Dengeli — makul fırsatları alır", "Cesur — marjinali de dener, SC/yağmur bekler"]
+WALL_RISK_MAP = {WALL_OPTIONS[0]: None, WALL_OPTIONS[1]: "düşük",
+                 WALL_OPTIONS[2]: "orta", WALL_OPTIONS[3]: "yüksek"}
+
+# Gelişim ekonomisi artık GENEL SİSTEMDEN gelir (config/game_settings.py +
+# models/game_universe.py aynı değerleri kullanır) — demo sadece yansıtır.
+_ECON = GameSettings()
+DRIVER_XP_PER_PRESS = _ECON.DRIVER_XP_PER_UPGRADE
+CAR_XP_PER_PRESS = _ECON.CAR_XP_PER_UPGRADE
 FACILITY_PRESS_COST = 0      # tesis geliştirmesi BEDAVA (hak yemez), sadece zaman alır
-FACILITY_DURATION = 5
-UPGRADES_PER_RACE = 5
+FACILITY_DURATION = _ECON.FACILITY_UPGRADE_TIME
+UPGRADES_PER_RACE = _ECON.UPGRADES_PER_RACE
 
 
 # ----------------------------------------------------------------- yardımcılar
@@ -121,11 +127,12 @@ def ai_spend_upgrades(team, car, d1, d2, dynamic, log_lines):
     if not dynamic:
         return
     presses = UPGRADES_PER_RACE
-    # Tesis: bazen başlatır (bedava — hak tüketmez)
-    if team.active_facility_upgrade is None and random.random() < 0.15:
+    # Tesis: ŞANSA BAĞLI DEĞİL — boştaysa hemen yeni inşaat başlar (bedava,
+    # hak tüketmez; genel sistemle [game_universe] aynı davranış).
+    if team.active_facility_upgrade is None:
         avail = [f for f, _, _ in FACILITIES if team.facilities.get(f, 3) < 3]
         if avail:
-            f = random.choice(avail)
+            f = random.choice(avail)   # hangisi olacağı çeşitlilik için rastgele
             team.start_facility_upgrade(f, FACILITY_DURATION)
             log_lines.append((team.id, f"tesis: {f}"))
     while presses > 0:
@@ -194,18 +201,24 @@ def screen_strategy(options, my_drivers, drivers):
     print("\nSürüş stilleri:")
     for i, (sid, name, desc) in enumerate(STYLES, 1):
         print(f"  {i}. {name} — {desc}")
+    print("\nPit duvarı talimatı (yarış içi dinamik kararların risk iştahı):")
+    for i, o in enumerate(WALL_OPTIONS, 1):
+        print(f"  {i}. {o}")
     choices = {}
     for d_id in my_drivers:
         print(f"\n--- {drivers[d_id].name} ---")
         c = ask_int(f"  Pit stratejisi (1-{len(options)}) [1]: ", 1, len(options), default=1)
         st = ask_int("  Sürüş stili (1-3) [1]: ", 1, 3, default=1)
-        choices[d_id] = (options[c - 1], STYLES[st - 1][0])
+        w = ask_int(f"  Pit duvarı talimatı (1-{len(WALL_OPTIONS)}) [1]: ",
+                    1, len(WALL_OPTIONS), default=1)
+        choices[d_id] = (options[c - 1], STYLES[st - 1][0],
+                         WALL_RISK_MAP[WALL_OPTIONS[w - 1]])
     return choices
 
 
 GLOBAL_EVENTS = {"WEATHER", "SC", "VSC", "RED_FLAG", "RED_TYRES", "RESTART"}
 MY_EVENTS = {"LAUNCH", "OVERTAKE", "PIT", "SLOW_PIT", "DNF", "DAMAGE", "SPIN",
-             "LIMP", "REPAIR", "PERK", "PIT_RULE"}
+             "LIMP", "REPAIR", "PERK", "PIT_RULE", "PITWALL"}
 
 
 def build_replay_lines(res, my_ids, name_of, num_laps):
@@ -213,8 +226,8 @@ def build_replay_lines(res, my_ids, name_of, num_laps):
     Döner: [(lap, kind, text)] — kind: 'global' / 'mine' / 'pos'."""
     lines = []
     for e in res["events"]:
-        if e["lap"] == 0:
-            continue
+        if e["lap"] == 0 and e["type"] != "PITWALL":
+            continue   # tur-0 idari loglar hariç; pit penceresi tahmini gösterilir
         is_global = e["type"] in GLOBAL_EVENTS
         is_mine = e["type"] in MY_EVENTS and (
             e.get("driver") in my_ids or e.get("passed") in my_ids)
@@ -223,6 +236,8 @@ def build_replay_lines(res, my_ids, name_of, num_laps):
                 kind, tag = "global", "🌐"
             elif e["type"] in ("PIT", "SLOW_PIT", "PIT_RULE"):
                 kind, tag = "pit", "🔧"   # oyuncunun pitleri ayrı renkte gösterilir
+            elif e["type"] == "PITWALL":
+                kind, tag = "wall", "🧠"  # pit duvarı kararları (pencere/replan/EV)
             else:
                 kind, tag = "mine", "▶"
             lines.append((e["lap"], 1, kind,
@@ -448,8 +463,10 @@ def run_demo():
         styles = {}
         for d_id, dr in drivers.items():
             if dr.team_id == my_team:
-                card, style = my_choices[d_id]
+                card, style, wall_risk = my_choices[d_id]
                 apply_choice(strat, d_id, card)
+                if wall_risk is not None:   # talimat kartın risk etiketini ezer
+                    strat[d_id]["risk"] = wall_risk
                 styles[d_id] = style
             else:
                 card = ai_pick_card(options, dynamic)

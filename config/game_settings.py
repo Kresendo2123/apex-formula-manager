@@ -8,16 +8,21 @@ class GameSettings:
     # ==============================================================================
     # TEMEL LİMİTLER
     # ==============================================================================
-    MAX_STAT_VALUE = 100
+    MAX_STAT_VALUE = 130           # Stat tavanı ("efsane bölge" — modellerdeki STAT_CAP ile aynı)
     MAX_PERKS_PER_DRIVER = 2
 
     # ==============================================================================
     # YARIŞ HAFTASI (XP) VE TESİS GELİŞTİRME
+    # OSM tarzı sezon içi büyüme: 70 başlayan stat sezon sonu 100+ olabilmeli.
+    # Sürücü XP araçtan yüksek: araç geliştirmesi 2 pilota yarar, sürücü teke —
+    # sürücü yatırımının gerçek bir alternatif olması için daha hızlı meyve verir.
+    # XP eğrileri: sürücü 100+stat^4/1600, araç 500+stat^5/55000 (models/).
     # ==============================================================================
-    UPGRADES_PER_RACE = 5          # Yarış arası takıma verilen hamle/antrenman hakkı
-    BASE_XP_PER_UPGRADE = 25000    # Antrenman başına taban XP (tesis çarpanlarından önce)
-    PERK_LEARN_CHANCE = 0.10       # Pilota odaklanınca stat yerine %10 perk kazanma şansı
-    FACILITY_UPGRADE_TIME = 6      # Bir tesisin seviye atlaması için gereken yarış sayısı
+    UPGRADES_PER_RACE = 5             # Yarış arası takıma verilen hamle/antrenman hakkı
+    DRIVER_XP_PER_UPGRADE = 75000     # Sürücü antrenmanı başına taban XP (tesis çarpanı öncesi)
+    CAR_XP_PER_UPGRADE = 230000       # Araç geliştirmesi başına taban XP (tesis çarpanı öncesi)
+    PERK_LEARN_CHANCE = 0.10          # Pilota odaklanınca stat yerine %10 perk kazanma şansı
+    FACILITY_UPGRADE_TIME = 5         # Tesisin seviye atlama süresi (yarış) — hak YEMEZ, bedava
     XP_BASE_COST = 10              # Eski gelişim eğrisi tabanı (yeni modeller OOP kullanıyor)
     XP_GROWTH_FACTOR = 1.15        # Eski gelişim eğrisi üstel büyüme faktörü
 
@@ -145,6 +150,34 @@ class GameSettings:
     SLOW_PIT_EXTRA_MAX = 5.0      # Yavaş pit ek kaybı üst sınırı (sn)
     LATE_PIT_SKIP_WINDOW = 8      # Son N turda planlı kuru pit, lastik dayanacaksa atlanır
                                   # (iki-bileşim kuralı sağlanmış olmalı — dinamik fırsat)
+
+    # ==============================================================================
+    # PİT DUVARI — DİNAMİK YARIŞ İÇİ STRATEJİ
+    # Yarış öncesi kart bir NİYETTİR; dinamik olaylarda (yağmur biter, SC çıkar,
+    # kural-2 yaklaşır) pit duvarı kalan yarışı yeniden planlar. Tüm kararlar
+    # PENCERE matematiğiyle alınır: aday pit turlarının maliyet eğrisinin dibi
+    # + EPS içindeki aralık = pit penceresi. Kumar = pencereyi bilinçli esnetmek.
+    # Kararlar PITWALL eventi olarak loglanır (şeffaflık = adalet hissi).
+    # ==============================================================================
+    PITWALL_ENABLED = True        # Kapatılırsa eski statik plan + guard davranışı (A/B testi)
+    PIT_WINDOW_EPS = 2.5          # Pencere genişliği: dip maliyet + bu sn içindeki turlar
+    PITWALL_MAX_BLEED = 3.5       # Pencere esnetmenin kabul edilebilir azami bedeli (sn)
+    # Risk profili karttan gelir (kartların "risk" alanı). Kararları şekillendirir:
+    #   sc_gain: SC/VSC ucuz pitine girmek için gereken net kazanç eşiği (sn).
+    #            Düşük risk yalnız bariz fırsatı alır; yüksek risk marjinali de dener.
+    #   err    : karar zarı — bu olasılıkla EV-optimal OLMAYAN seçenek seçilir
+    #            (saçma karar değil: en iyi 2 makul aksiyonun ikincisi).
+    #   stretch: pencere dibinden sonra fırsat (SC/yağmur) bekleme turu — kanama
+    #            PITWALL_MAX_BLEED'i aşamaz.
+    PITWALL_RISK = {
+        "düşük":  {"sc_gain": 4.0, "err": 0.05, "stretch": 0},
+        "orta":   {"sc_gain": 1.5, "err": 0.08, "stretch": 1},
+        "yüksek": {"sc_gain": 0.0, "err": 0.12, "stretch": 2},
+    }
+    # SC pitinin GİZLİ maliyeti: pit altında kuyruğa düşersin ve geçişi zor pistte
+    # o pozisyonlar süre-EV'nin söylemediği bir bedeldir. EV'den düşülür:
+    # ceza = PITWALL_SC_POS_COST x geçiş_zorluğu (Monza'da ucuz, Monako'da caydırıcı).
+    PITWALL_SC_POS_COST = 6.0
 
     # ==============================================================================
     # SOLLAMA DETAYI (DRS / SLIPSTREAM / KİRLİ HAVA / MÜCADELE)

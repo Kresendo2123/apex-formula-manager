@@ -211,7 +211,7 @@ class GameUniverse:
                         perk_obj = get_perk_instance(p_id)
                         exp_bonus = perk_obj.apply_xp_modifier(exp_bonus)
                         
-                    added_xp = int(self.settings.BASE_XP_PER_UPGRADE * mult * exp_bonus)
+                    added_xp = int(self.settings.DRIVER_XP_PER_UPGRADE * mult * exp_bonus)
                     old_val = getattr(drv, stat)
                     drv.add_xp_to_stat(stat, added_xp)
                     new_val = getattr(drv, stat)
@@ -226,7 +226,7 @@ class GameUniverse:
                         mult = team.get_facility_multiplier("wind_tunnel")
                     else:
                         mult = team.get_facility_multiplier("factory")
-                    added_xp = int(self.settings.BASE_XP_PER_UPGRADE * mult)
+                    added_xp = int(self.settings.CAR_XP_PER_UPGRADE * mult)
                     
                     old_val = getattr(car, stat)
                     car.add_xp_to_stat(stat, added_xp)
@@ -264,6 +264,10 @@ class GameUniverse:
 
         result = self.engine.simulate_race(grid, profiles, track, form=form, strategies=strategies, forecast=forecast)
         self.champ.process_race_result(result["classification"])
+
+        # Ham çıktılar (denge denetimi / server API / replay için)
+        self.latest_raw = result
+        self.latest_grid = list(grid)
         
         # Sonuçları Formatla
         grid_pos = {d_id: i + 1 for i, d_id in enumerate(grid)}

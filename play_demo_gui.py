@@ -27,6 +27,7 @@ from engine.championship import Championship
 from engine.strategy import plan_strategies, build_strategy_options, apply_choice
 from main import load_data, calculate_preseason_expectations
 from play_demo import (PTS, DRIVER_STATS, CAR_STATS, FACILITIES, STYLES,
+                       WALL_OPTIONS, WALL_RISK_MAP,
                        DRIVER_XP_PER_PRESS, CAR_XP_PER_PRESS,
                        FACILITY_PRESS_COST, FACILITY_DURATION, UPGRADES_PER_RACE,
                        ai_pick_aero, ai_pick_style, ai_pick_card, ai_spend_upgrades,
@@ -346,7 +347,16 @@ class DemoGUI(tk.Tk):
             ttk.Combobox(lf, textvariable=sv, values=style_labels, state="readonly",
                          width=58, font=("Segoe UI", 11)).grid(row=2, column=1,
                                                                sticky="w", padx=8)
-            self.choice_vars[d_id] = (cv, sv)
+            # Pit duvarı talimatı: yarış içi dinamik kararların (SC fırsatı,
+            # pencere esnetme, yağmur kumarı) risk iştahı. "Karttan" = kartın
+            # kendi risk etiketi kullanılır.
+            wv = tk.StringVar(value=WALL_OPTIONS[0])
+            tk.Label(lf, text="Pit duvarı talimatı:", bg=PANEL, fg=FG,
+                     font=("Segoe UI", 11)).grid(row=3, column=0, sticky="w", pady=2)
+            ttk.Combobox(lf, textvariable=wv, values=WALL_OPTIONS, state="readonly",
+                         width=58, font=("Segoe UI", 11)).grid(row=3, column=1,
+                                                               sticky="w", padx=8)
+            self.choice_vars[d_id] = (cv, sv, wv)
         self.big_button(self.content, "🏁 YARIŞI BAŞLAT",
                         self.run_race).pack(side="bottom", anchor="e", pady=10)
 
@@ -356,10 +366,14 @@ class DemoGUI(tk.Tk):
         self.my_choices = {}
         for d_id, dr in self.drivers.items():
             if dr.team_id == self.my_team:
-                cv, sv = self.choice_vars[d_id]
+                cv, sv, wv = self.choice_vars[d_id]
                 card = next(o for o in self.options if o["label"] == cv.get())
                 style_id = STYLES[[f"{n} — {d}" for _, n, d in STYLES].index(sv.get())][0]
                 apply_choice(strat, d_id, card)
+                # Pit duvarı talimatı kartın risk etiketini ezebilir
+                wall_risk = WALL_RISK_MAP.get(wv.get())
+                if wall_risk is not None:
+                    strat[d_id]["risk"] = wall_risk
                 styles[d_id] = style_id
                 self.my_choices[d_id] = (card, style_id)
             else:
@@ -391,6 +405,7 @@ class DemoGUI(tk.Tk):
         txt.tag_configure("global", foreground="#7ec8ff")
         txt.tag_configure("mine", foreground="#ffd166")
         txt.tag_configure("pit", foreground="#6ee7a8")   # pilotlarının pitleri yeşil
+        txt.tag_configure("wall", foreground="#c89bff")  # pit duvarı kararları mor
         txt.tag_configure("pos", foreground=SUBTLE)
         lines = build_replay_lines(self.res, self.my_ids, self.name_of, self.num_laps)
         if not lines:

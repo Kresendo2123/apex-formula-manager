@@ -82,7 +82,11 @@ class RaceDirector:
             tyre_wear_coeff_val = perk.modify_tire_wear(tyre_wear_coeff_val)
 
         base_risk = self.settings.BASE_DNF_CHANCE * 1000
-        reliability_penalty = (100 - car.reliability) * self.settings.RELIABILITY_RISK_SCALE
+        # Clamp: reliability 100'ü aşınca mekanik risk NEGATİFE dönüp taban riski
+        # yemesin (gelişimli sezonda geç faz DNF'i 1.5'e düşürüyordu). 100+
+        # güvenilirlik "ceza yok" demektir, "sigorta" değil; istikrarın (consistency)
+        # kaza riskini azaltma faydası ise bilinçli olarak clamp'siz bırakıldı.
+        reliability_penalty = max(0.0, (100 - car.reliability) * self.settings.RELIABILITY_RISK_SCALE)
         consistency_penalty = (100 - eff_consistency) * strat_mods["crash_risk"]
         
         for perk in perk_instances:

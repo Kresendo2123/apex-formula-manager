@@ -124,7 +124,8 @@ def run_season(seed=79 , filename="f1_season_races_report.xlsx"):
                         break
         
         UPGRADES_PER_RACE = settings.UPGRADES_PER_RACE
-        BASE_XP_PER_UPGRADE = settings.BASE_XP_PER_UPGRADE
+        DRIVER_XP = settings.DRIVER_XP_PER_UPGRADE
+        CAR_XP = settings.CAR_XP_PER_UPGRADE
         
         for t_id, team in teams.items():
             team_drivers = [d for d in drivers.values() if d.team_id == t_id]
@@ -163,7 +164,7 @@ def run_season(seed=79 , filename="f1_season_races_report.xlsx"):
                         perk_obj = get_perk_instance(p_id)
                         exp_bonus = perk_obj.apply_xp_modifier(exp_bonus)
                         
-                    drv.add_xp_to_stat(stat, int(BASE_XP_PER_UPGRADE * multiplier * exp_bonus))
+                    drv.add_xp_to_stat(stat, int(DRIVER_XP * multiplier * exp_bonus))
                     upgrade_history[t_id]["drivers"][drv.id][stat] += 1
                     
                 else:
@@ -173,7 +174,7 @@ def run_season(seed=79 , filename="f1_season_races_report.xlsx"):
                     else:
                         multiplier = team.get_facility_multiplier("factory")
                     
-                    car.add_xp_to_stat(stat, int(BASE_XP_PER_UPGRADE * multiplier))
+                    car.add_xp_to_stat(stat, int(CAR_XP * multiplier))
                     upgrade_history[t_id]["car"][stat] += 1
 
         # Hafta sonu formu (sıralama + yarışta aynı)
