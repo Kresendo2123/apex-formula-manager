@@ -303,6 +303,7 @@ class LapRaceEngine:
         pit_loss = max(0.0, base_loss * discount + random.gauss(0, s.PIT_TIME_SIGMA))
         st["current_compound"] = new_comp
         st["compounds_used"].add(new_comp)
+        st["stint_history"].append({"compound": new_comp, "from": lap, "reason": label})
         st["wear_pct"] = 0.0
         st["pits"] += 1
         st["last_pit_lap"] = lap
@@ -326,6 +327,12 @@ class LapRaceEngine:
         for st in track_order:
             new_comp = self._desired_compound(
                 st["compound_by_lap"][lap], wetness, st["wet_bias"], st["current_compound"])
+            if new_comp != st["current_compound"]:
+                st["stint_history"].append(
+                    {"compound": new_comp, "from": lap, "reason": "kırmızı"})
+            else:   # aynı bileşim, taze set — yine kaydedilir (aşınma sıfırlandı)
+                st["stint_history"].append(
+                    {"compound": new_comp, "from": lap, "reason": "kırmızı (taze set)"})
             st["current_compound"] = new_comp
             st["compounds_used"].add(new_comp)
             st["wear_pct"] = 0.0
@@ -658,6 +665,9 @@ class LapRaceEngine:
                 "running": True, "dnf_lap": None, "dnf_cause": None,
                 "compound_by_lap": compound_by_lap, "current_compound": compound_by_lap[1],
                 "compounds_used": {compound_by_lap[1]},  # iki-bileşim kuralı takibi
+                # Stint geçmişi: her bileşim değişimi sebep etiketiyle (plan/hava/
+                # SC/VSC/kırmızı) kaydedilir — UI pit raporu / replay / server için
+                "stint_history": [{"compound": compound_by_lap[1], "from": 1, "reason": "start"}],
                 "wear_pct": 0.0, "pits": 0, "wet_bias": wet_bias, "reaction_lag": reaction_lag,
                 "risk": risk, "rule2_planned": False,   # pit duvarı durumu
                 "pending_switch_lap": None,
@@ -1166,6 +1176,7 @@ class LapRaceEngine:
         reason = "hava" if not same_cat else "plan"
         st["current_compound"] = desired
         st["compounds_used"].add(desired)
+        st["stint_history"].append({"compound": desired, "from": lap, "reason": reason})
         st["wear_pct"] = 0.0
         st["pits"] += 1
         st["last_pit_lap"] = lap
@@ -1199,6 +1210,7 @@ class LapRaceEngine:
                 "status": "FIN", "laps_completed": st["laps_completed"],
                 "total_time": round(st["cumulative_time"], 3),
                 "pits": st["pits"], "final_compound": st["current_compound"], "repairs": st["repairs"],
+                "stints": st.get("stint_history", []),
                 # Analiz: yarış içi kayıp/kazanç dökümü (saniye)
                 "loss_breakdown": {
                     "pit": round(st.get("loss_pit", 0.0), 1),
@@ -1215,6 +1227,7 @@ class LapRaceEngine:
                 "driver_id": st["driver_id"], "team_id": st["team_id"], "position": pos,
                 "status": "DNF", "laps_completed": st["laps_completed"], "total_time": None,
                 "pits": st["pits"], "final_compound": st["current_compound"],
+                "stints": st.get("stint_history", []),
                 "dnf_cause": st["dnf_cause"], "dnf_detail": st.get("dnf_detail"),
                 "repairs": st["repairs"],
             })

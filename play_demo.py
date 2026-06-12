@@ -264,6 +264,30 @@ def screen_race_replay(res, my_ids, name_of, num_laps):
         print("  " + txt)
 
 
+def pit_report_lines(res, my_ids, my_choices, name_of):
+    """Pilot başına 'planlanan vs gerçekleşen' strateji raporu (konsol + GUI ortak).
+    Plan = seçilen kartın stint dizisi; Gerçek = motorun stint geçmişi
+    (tur aralıkları + her pitin sebebi: plan/hava/SC/VSC/kırmızı)."""
+    K = {"soft": "S", "medium": "M", "hard": "H", "inter": "I", "wet": "W"}
+    lines = []
+    for d_id in my_ids:
+        row = next(c for c in res["classification"] if c["driver_id"] == d_id)
+        card = my_choices[d_id][0]
+        plan_txt = " → ".join(f"{K[st['compound']]}{st['laps']}" for st in card["plan"])
+        stints = row.get("stints", [])
+        parts = []
+        for i, sti in enumerate(stints):
+            end = (stints[i + 1]["from"] - 1) if i + 1 < len(stints) else row["laps_completed"]
+            seg = f"{K[sti['compound']]}(T{sti['from']}-{end})"
+            if sti["reason"] != "start":
+                seg += f"[{sti['reason']}]"
+            parts.append(seg)
+        durum = "" if row["status"] == "FIN" else " — DNF"
+        lines.append(f"{name_of[d_id]:<11s} Plan : {plan_txt}")
+        lines.append(f"{'':<11s} Gerçek: {' '.join(parts)}  | {row['pits']} pit{durum}")
+    return lines
+
+
 def screen_race_result(res, my_ids, drivers, teams, name_of):
     header("YARIŞ SONUCU", "-")
     my_points = 0
@@ -488,6 +512,9 @@ def run_demo():
                                    forecast=fc, conditions=conditions)
         screen_race_replay(res, my_ids, name_of, num_laps)
         pts = screen_race_result(res, my_ids, drivers, teams, name_of)
+        print("\nPİT RAPORU (plan vs gerçekleşen):")
+        for line in pit_report_lines(res, my_ids, my_choices, name_of):
+            print("  " + line)
         champ.process_race_result(res["classification"])
         screen_standings(champ, teams, my_team)
 

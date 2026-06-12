@@ -31,7 +31,7 @@ from play_demo import (PTS, DRIVER_STATS, CAR_STATS, FACILITIES, STYLES,
                        DRIVER_XP_PER_PRESS, CAR_XP_PER_PRESS,
                        FACILITY_PRESS_COST, FACILITY_DURATION, UPGRADES_PER_RACE,
                        ai_pick_aero, ai_pick_style, ai_pick_card, ai_spend_upgrades,
-                       build_replay_lines, screen_season_end)
+                       build_replay_lines, pit_report_lines, screen_season_end)
 
 BG = "#16181d"
 FG = "#f4f6f8"
@@ -467,6 +467,15 @@ class DemoGUI(tk.Tk):
                    f"Bu yarıştan {my_points} puan  |  Markalar şampiyonasında P{my_rank} "
                    f"({self.champ.team_standings.get(self.my_team, 0)} puan)",
                    12, bold=True, side="bottom", anchor="w", pady=6)
+        # PİT RAPORU: pilot başına planlanan strateji vs gerçekleşen stintler
+        # (tur aralıkları + her pitin sebebi: plan / hava / SC / VSC / kırmızı)
+        rapor = tk.Frame(self.content, bg="#262a31", padx=10, pady=6)
+        rapor.pack(side="bottom", fill="x", pady=(4, 2))
+        tk.Label(rapor, text="PİT RAPORU — plan vs gerçekleşen", bg="#262a31",
+                 fg="#6ee7a8", font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        for line in pit_report_lines(self.res, self.my_ids, self.my_choices, self.name_of):
+            tk.Label(rapor, text=line, bg="#262a31", fg=FG,
+                     font=("Consolas", 11)).pack(anchor="w")
         sb = ttk.Scrollbar(self.content, orient="vertical", command=tv.yview)
         tv.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")

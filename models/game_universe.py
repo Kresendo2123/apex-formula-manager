@@ -93,6 +93,7 @@ class GameUniverse:
         # Son simülasyon logları
         self.latest_upgrades = []
         self.latest_race_result = []
+        self.latest_pit_details = []  # Pilot başına stint dökümü (admin paneli pit sekmesi)
         
         # Sürücülerin Qualifying seansında kullandıkları son lastikleri saklar (Yarış başlangıcı için)
         self.driver_qualy_tire_choices = {}
@@ -159,7 +160,8 @@ class GameUniverse:
         
         self.latest_upgrades = []
         self.latest_race_result = []
-        
+        self.latest_pit_details = []
+
         # --- 1. HAFTA İÇİ GELİŞTİRMELERİ (UPGRADES & AR-GE) ---
         driver_stats = ["pace", "consistency", "attack_defense", "tire_management"]
         car_stats = ["acceleration", "top_speed", "grip", "reliability", "tire_consumption"]
@@ -307,4 +309,22 @@ class GameUniverse:
                 "Değişim": f"🟢 +{delta}" if delta>0 else (f"🔴 {delta}" if delta<0 else "➖ 0"),
                 "Pit Stop": e["pits"],
                 "Durum (Fark)": durum
+            })
+
+            # Pit sekmesi: motorun stint geçmişini tur aralıklarıyla yazılı döküme çevir
+            stints = e.get("stints", [])
+            parts = []
+            for j, sti in enumerate(stints):
+                end = (stints[j + 1]["from"] - 1) if j + 1 < len(stints) else e["laps_completed"]
+                seg = f"{sti['compound'].upper()} (T{sti['from']}-{end})"
+                if sti["reason"] != "start":
+                    seg += f" [{sti['reason']}]"
+                parts.append(seg)
+            self.latest_pit_details.append({
+                "Sıra": e["position"],
+                "Pilot": self.drivers[d_id].name,
+                "Takım": self.teams[e["team_id"]].name,
+                "Pit Sayısı": e["pits"],
+                "Stintler": "  →  ".join(parts),
+                "Durum": e["status"],
             })
