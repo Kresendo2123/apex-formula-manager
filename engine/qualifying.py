@@ -4,8 +4,9 @@ from typing import List, Dict, Any
 from engine.race_director import RaceDirector
 
 class Qualifying:
-    def __init__(self, settings):
+    def __init__(self, settings, rng: random.Random = None):
         self.settings = settings
+        self.rng = rng or random.Random()
 
     def _calculate_lap_time(self, driver, car, track, is_raining, form_val, track_evolution,
                             aero_level=3):
@@ -48,7 +49,7 @@ class Qualifying:
             
         # 5. Rastgele Dalgalanma (Qualy'de kaza riski çok düşüktür)
         # Pilotun consistency statına göre dalgalanma
-        noise = random.gauss(0, s.LAP_NOISE_BASE * s.QUALI_NOISE_MULT)
+        noise = self.rng.gauss(0, s.LAP_NOISE_BASE * s.QUALI_NOISE_MULT)
         lap_time *= (1 + noise)
         
         return round(lap_time, 3)
@@ -73,7 +74,7 @@ class Qualifying:
         q1_times = []
         for d in all_drivers:
             # Seans sonuna doğru tur atma şansı (Evolution yüksek)
-            evolution = random.uniform(0.7, 1.0)
+            evolution = self.rng.uniform(0.7, 1.0)
             time = self._calculate_lap_time(d, cars[teams[d.team_id].car_id], track, season_is_raining, form.get(d.id, 0.0), evolution, aero_levels.get(d.id, 3))
             q1_times.append((d.id, time))
             results[d.id]["q1"] = time
@@ -85,7 +86,7 @@ class Qualifying:
         q2_times = []
         for d_id in top_16:
             d = drivers[d_id]
-            evolution = random.uniform(0.8, 1.0)
+            evolution = self.rng.uniform(0.8, 1.0)
             time = self._calculate_lap_time(d, cars[teams[d.team_id].car_id], track, season_is_raining, form.get(d.id, 0.0), evolution, aero_levels.get(d_id, 3))
             q2_times.append((d_id, time))
             results[d_id]["q2"] = time
@@ -98,14 +99,14 @@ class Qualifying:
         q3_tire_compounds = {}
         for d_id in top_10:
             d = drivers[d_id]
-            evolution = random.uniform(0.9, 1.0) # Q3'te pist en hızlı halindedir
+            evolution = self.rng.uniform(0.9, 1.0) # Q3'te pist en hızlı halindedir
             time = self._calculate_lap_time(d, cars[teams[d.team_id].car_id], track, season_is_raining, form.get(d.id, 0.0), evolution, aero_levels.get(d_id, 3))
             q3_times.append((d_id, time))
             results[d_id]["q3"] = time
             
             # Q3'te kullanılan lastiği kaydet (Yarış başlangıç kuralı için)
             if season_is_raining:
-                q3_tire_compounds[d_id] = "inter" if random.random() > 0.5 else "wet"
+                q3_tire_compounds[d_id] = "inter" if self.rng.random() > 0.5 else "wet"
             else:
                 q3_tire_compounds[d_id] = "soft" # Genelde en hızlı tur soft ile atılır
                 

@@ -3,8 +3,9 @@ from typing import Dict, Any
 from engine.perks import get_perk_instance
 
 class RaceDirector:
-    def __init__(self, settings):
+    def __init__(self, settings, rng: random.Random = None):
         self.settings = settings
+        self.rng = rng or random.Random()
 
     @staticmethod
     def ideal_aero(track, settings) -> float:
@@ -127,7 +128,7 @@ class RaceDirector:
         perk_instances = [get_perk_instance(p_id) for p_id in driver.perks]
 
         variance_range = track.weather_volatility if is_raining else 0.05
-        rng_multiplier = random.uniform(1 - variance_range, 1 + variance_range)
+        rng_multiplier = self.rng.uniform(1 - variance_range, 1 + variance_range)
         final_power = profile["base_power"] * rng_multiplier
 
         # GRID AVANTAJI: Sadece yarışın başında (Lap 1) tam etkili olmalı.

@@ -66,17 +66,22 @@ class GameUniverse:
     Oyunun tüm evrenini (Veritabanı, Sezon durumu, Şampiyona ve Motorları)
     tek bir Obje içinde barındırır.
     """
-    def __init__(self, settings: GameSettings):
+    def __init__(self, settings: GameSettings, seed: int = None):
         self.settings = settings
+        # Evren RNG'si: seed verilirse tüm sezon (gelişim, quali, yarış seedleri)
+        # deterministik tekrarlanır. Yarış başına ayrı seed üretilir ve
+        # latest_raw["seed"] içinde raporlanır (replay = o seed + aynı girdiler).
+        self.seed = seed if seed is not None else random.getrandbits(48)
+        self.rng = random.Random(self.seed)
         self.drivers: Dict[str, Driver] = {}
         self.teams: Dict[str, Team] = {}
         self.cars: Dict[str, Car] = {}
         self.tracks: List[Track] = []
-        
-        # Engine referansları
-        self.director = RaceDirector(self.settings)
-        self.engine = LapRaceEngine(self.settings)
-        self.quali = Qualifying(self.settings)
+
+        # Engine referansları (hepsi evren RNG'sini paylaşır)
+        self.director = RaceDirector(self.settings, rng=self.rng)
+        self.engine = LapRaceEngine(self.settings, rng=self.rng)
+        self.quali = Qualifying(self.settings, rng=self.rng)
         self.champ = Championship()
         
         # Sezon ilerlemesi
@@ -117,7 +122,7 @@ class GameUniverse:
         # Takım Stratejileri oluştur
         self.team_strategies = {}
         for t_id in self.teams:
-            strategy_type = random.choice(["driver_focused", "car_focused", "balanced"])
+            strategy_type = self.rng.choice(["driver_focused", "car_focused", "balanced"])
             if strategy_type == "driver_focused":
                 w = {"driver1": 0.40, "driver2": 0.40, "car": 0.20}
             elif strategy_type == "car_focused":
@@ -173,7 +178,7 @@ class GameUniverse:
                     self.latest_upgrades.append({"Takım": team.name, "Kategori": "Ar-Ge", "Hedef": "Tesis", "Detay": "İnşaat Tamamlandı! Tesis Seviye Atladı."})
             else:
                 facs = ["wind_tunnel", "simulator", "factory"]
-                random.shuffle(facs)
+                self.rng.shuffle(facs)
                 for f in facs:
                     if team.facilities.get(f, 1) < 3:
                         team.start_facility_upgrade(f, self.settings.FACILITY_UPGRADE_TIME)
@@ -185,7 +190,7 @@ class GameUniverse:
             weights = self.team_strategies[t_id]
             
             for _ in range(self.settings.UPGRADES_PER_RACE): 
-                rand_val = random.random()
+                rand_val = self.rng.random()
                 if rand_val < weights["driver1"] and len(team_drivers) > 0:
                     choice = "driver1"
                 elif rand_val < (weights["driver1"] + weights["driver2"]) and len(team_drivers) > 1:
@@ -196,15 +201,15 @@ class GameUniverse:
                 if choice in ["driver1", "driver2"]:
                     drv = team_drivers[0] if choice == "driver1" else team_drivers[1]
                     
-                    if random.random() < self.settings.PERK_LEARN_CHANCE and len(drv.perks) < self.settings.MAX_PERKS_PER_DRIVER:
+                    if self.rng.random() < self.settings.PERK_LEARN_CHANCE and len(drv.perks) < self.settings.MAX_PERKS_PER_DRIVER:
                         potential = [p for p in self.available_perks if p not in drv.perks]
                         if potential:
-                            new_perk = random.choice(potential)
+                            new_perk = self.rng.choice(potential)
                             drv.add_perk(new_perk)
                             self.latest_upgrades.append({"Takım": team.name, "Kategori": "Özel Yetenek", "Hedef": drv.name, "Detay": f"YENİ PERK ÖĞRENİLDİ: {new_perk}!"})
                             continue
                             
-                    stat = random.choice(driver_stats)
+                    stat = self.rng.choice(driver_stats)
                     mult = team.get_facility_multiplier("simulator")
                     
                     exp_bonus = 1.0
@@ -223,7 +228,7 @@ class GameUniverse:
                         msg += f" 🔥 (SEVİYE ATLADI: {old_val} -> {new_val})"
                     self.latest_upgrades.append({"Takım": team.name, "Kategori": "Sürücü Antrenmanı", "Hedef": drv.name, "Detay": msg})
                 else:
-                    stat = random.choice(car_stats)
+                    stat = self.rng.choice(car_stats)
                     if stat in ["grip", "acceleration"]:
                         mult = team.get_facility_multiplier("wind_tunnel")
                     else:
@@ -241,9 +246,9 @@ class GameUniverse:
 
         # --- 2. SIRALAMA TURLARI (QUALIFYING) ---
         # Artık Q1, Q2, Q3 ve Dinamik Lastik Kuralı devrede
-        form = {d_id: random.gauss(0, self.settings.RACE_FORM_SIGMA) for d_id in self.drivers}
+        form = {d_id: self.rng.gauss(0, self.settings.RACE_FORM_SIGMA) for d_id in self.drivers}
         # Qualy için ayrı bir yağmur zarı
-        is_qualy_raining = random.random() < (track.weather_volatility * 2.0)
+        is_qualy_raining = self.rng.random() < (track.weather_volatility * 2.0)
         
         grid, self.driver_qualy_tire_choices = self.quali.simulate_qualifying(
             self.drivers, self.cars, self.teams, track, is_qualy_raining, form=form
@@ -260,11 +265,17 @@ class GameUniverse:
         
         # Stratejileri planla
         # Q3'e kalanların (self.driver_qualy_tire_choices içinde olanların) başlangıç lastiklerini zorla
-        strategies = plan_strategies(grid, forecast, num_laps, self.settings, track=track)
-        
+        strategies = plan_strategies(grid, forecast, num_laps, self.settings,
+                                     rng=self.rng, track=track)
+
         apply_qualifying_tire_rule(strategies, self.driver_qualy_tire_choices, forecast)
 
-        result = self.engine.simulate_race(grid, profiles, track, form=form, strategies=strategies, forecast=forecast)
+        # Yarış seedi evren RNG'sinden türetilir: sezon seedi sabitse her yarış da
+        # deterministiktir; seed sonuçta raporlanır (latest_raw["seed"]).
+        race_seed = self.rng.getrandbits(48)
+        result = self.engine.simulate_race(grid, profiles, track, form=form,
+                                           strategies=strategies, forecast=forecast,
+                                           seed=race_seed)
         self.champ.process_race_result(result["classification"])
 
         # Ham çıktılar (denge denetimi / server API / replay için)
