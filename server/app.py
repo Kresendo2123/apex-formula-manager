@@ -18,7 +18,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from engine.events import SCHEMA_VERSION
 from engine.season_session import (SubmitError, PHASE_AERO, PHASE_STRATEGY,
-                                   PHASE_UPGRADE)
+                                   PHASE_UPGRADE, team_catalog)
 from server import protocol as P
 from server.rooms import Room, RoomManager, Player
 
@@ -136,6 +136,11 @@ async def ws_endpoint(ws: WebSocket):
                 await err(P.ERR_BAD_MESSAGE, "geçersiz JSON")
                 continue
             op = m.get("op")
+
+            # ---- oda gerektirmeyen sorgular
+            if op == "list_teams":
+                await ws.send_json({"ev": "team_catalog", "teams": team_catalog()})
+                continue
 
             # ---- lobi işlemleri
             if op == "create_room":

@@ -16,9 +16,11 @@ yalnız zarf/akış mesajlarını kapsar.
   submit_strategy {choices: {driver_id: {card_id?, style?, wall?}}}
   submit_upgrades {spends: [...], facility?}   (bkz. SeasonSession.submit_upgrades)
   sync          {}                      (durumu yeniden iste — reconnect sonrası)
+  list_teams    {}                      (oyun-öncesi takım kataloğu; odaya gerek yok)
 
 SUNUCU -> İSTEMCİ (ev)
   hello         {protocol_version, schema_version}
+  team_catalog  {teams: [{id, name, drivers: [isim,...]}]}   (list_teams yanıtı)
   joined        {player_id, rejoin_token, room}      (yalnız katılan oyuncuya)
   room          {code, host, started, players: [{name, team_id, ready, connected}]}
   static_data   {teams, drivers, calendar, styles, ...}   (oyun başlarken)

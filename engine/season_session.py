@@ -41,6 +41,18 @@ PHASE_AERO, PHASE_STRATEGY, PHASE_UPGRADE, PHASE_END = \
     "aero", "strategy", "upgrade", "season_end"
 
 
+def team_catalog() -> List[Dict[str, Any]]:
+    """Oyun-öncesi (lobi) takım seçimi için sabit takım listesi. Oturum
+    gerektirmez; doğrudan tohum verisinden kurulur. İstemci bunu lobide
+    gerçek bir takım seçici çizmek için kullanır."""
+    drivers_by_team: Dict[str, List[str]] = {}
+    for d in SEED_DRIVERS:
+        drivers_by_team.setdefault(d["team_id"], []).append(d["name"])
+    return [{"id": t["id"], "name": t["name"],
+             "drivers": drivers_by_team.get(t["id"], [])}
+            for t in SEED_TEAMS]
+
+
 class SubmitError(ValueError):
     """Geçersiz oyuncu girdisi (yanlış faz, yanlış takım, bilinmeyen id...)."""
 
